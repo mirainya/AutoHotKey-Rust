@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>像素选择器</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      cursor: crosshair;
+      background: rgba(0, 0, 0, 0.3);
+    }
+    .selection-box {
+      position: absolute;
+      border: 2px solid #409eff;
+      background: rgba(64, 158, 255, 0.1);
+      pointer-events: none;
+    }
+    .selection-info {
+      position: absolute;
+      bottom: -30px;
+      right: 0;
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .toolbar {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.9);
+      padding: 12px 16px;
+      border-radius: 8px;
+      display: none;
+      pointer-events: auto;
+      z-index: 10000;
+    }
+    .toolbar.show {
+      display: flex;
+      gap: 12px;
+    }
+    .toolbar button {
+      padding: 8px 20px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .btn-confirm {
+      background: #409eff;
+      color: white;
+    }
+    .btn-confirm:hover {
+      background: #66b1ff;
+    }
+    .btn-cancel {
+      background: #f56c6c;
+      color: white;
+    }
+    .btn-cancel:hover {
+      background: #f78989;
+    }
+  </style>
+</head>
+<body>
+  <div id="selection" class="selection-box" style="display: none;">
+    <div class="selection-info" id="info"></div>
+  </div>
+  <div id="toolbar" class="toolbar">
+    <button class="btn-confirm" id="btnConfirm">确认</button>
+    <button class="btn-cancel" id="btnCancel">取消</button>
+  </div>
+  <script>
+    const { emit } = window.__TAURI__.event
+    const { getCurrentWindow } = window.__TAURI__.window
+
+    let selecting = false
+    let startX = 0, startY = 0, currentX = 0, currentY = 0
+    let selectedRect = null
+    const selection = document.getElementById('selection')
+    const info = document.getElementById('info')
+    const toolbar = document.getElementById('toolbar')
+    const scale = window.devicePixelRatio
+
+    // 页面加载完成后显示窗口
+    window.addEventListener('DOMContentLoaded', () => {
+      getCurrentWindow().show()
+    })
+
+    document.body.addEventListener('mousedown', (e) => {
+      if (selectedRect) return
+      selecting = true
+      startX = e.screenX
+      startY = e.screenY
+      currentX = e.screenX
+      currentY = e.screenY
+      selection.style.display = 'block'
+    })
+
+    document.body.addEventListener('mousemove', (e) => {
+      if (!selecting) return
+      currentX = e.screenX
+      currentY = e.screenY
+      updateSelection()
+    })
+
+    document.body.addEventListener('mouseup', () => {
+      if (!selecting) return
+      selecting = false
+      const rect = getRect()
+      if (rect.width > 5 && rect.height > 5) {
+        selectedRect = rect
+        toolbar.classList.add('show')
+        document.body.style.cursor = 'default'
+      }
+    })
+
+    document.getElementById('btnConfirm').addEventListener('click', async () => {
+      console.log('点击了确认按钮', selectedRect)
+      if (selectedRect) {
+        try {
+          // 隐藏遮罩层和UI元素
+          document.body.style.background = 'transparent'
+          selection.style.display = 'none'
+          toolbar.style.display = 'none'
+
+          // 等待界面更新
+          await new Promise(resolve => setTimeout(resolve, 100))
+
+          await emit('pixel-selection-complete', {
+            x: Math.round(selectedRect.x * scale),
+            y: Math.round(selectedRect.y * scale),
+            width: Math.round(selectedRect.width * scale),
+            height: Math.round(selectedRect.height * scale)
+          })
+          console.log('事件已发送')
+
+          // 延迟关闭窗口，确保主窗口有时间接收事件
+          await new Promise(resolve => setTimeout(resolve, 100))
+          getCurrentWindow().close()
+        } catch (error) {
+          console.error('发送事件失败', error)
+        }
+      }
+    })
+
+    document.getElementById('btnCancel').addEventListener('click', () => {
+      console.log('点击了取消按钮')
+      try {
+        getCurrentWindow().close()
+      } catch (error) {
+        console.error('关闭窗口失败', error)
+        alert('关闭窗口失败: ' + error)
+      }
+    })
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        getCurrentWindow().close()
+      }
+    })
+
+    function getRect() {
+      const x = Math.min(startX, currentX)
+      const y = Math.min(startY, currentY)
+      const width = Math.abs(currentX - startX)
+      const height = Math.abs(currentY - startY)
+      return { x, y, width, height }
+    }
+
+    function updateSelection() {
+      const rect = getRect()
+      const offsetX = window.screenX
+      const offsetY = window.screenY
+      selection.style.left = (rect.x - offsetX) + 'px'
+      selection.style.top = (rect.y - offsetY) + 'px'
+      selection.style.width = rect.width + 'px'
+      selection.style.height = rect.height + 'px'
+      info.textContent = `${Math.round(rect.width)} × ${Math.round(rect.height)}`
+    }
+  </script>
+</body>
+</html>

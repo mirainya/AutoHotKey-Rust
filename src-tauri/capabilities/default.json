@@ -1,0 +1,19 @@
+{
+  "identifier": "default",
+  "description": "Default permissions for the application",
+  "windows": ["*"],
+  "permissions": [
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "core:window:allow-create",
+    "core:window:allow-close",
+    "core:window:allow-show",
+    "core:webview:allow-create-webview-window"
+  ]
+}

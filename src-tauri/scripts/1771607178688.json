@@ -1,0 +1,7 @@
+{
+  "id": "1771607178688",
+  "name": "第二个脚本",
+  "code": "// 在这里编写JavaScript代码\n// ===== AutoHotkey Rust 功能测试脚本 =====\nprint(\"=== 开始测试 ===\\n\");\n\n// 1. 基础JavaScript测试\nprint(\"【1】测试基础JavaScript功能\");\nlet testName = \"AutoHotkey Rust\";\nlet version = 1.0;\nprint(\"✓ 变量声明: \" + testName + \" v\" + version);\n\n// 2. 条件语句测试\nprint(\"\\n【2】测试条件语句\");\nif (version >= 1.0) {\n    print(\"✓ if语句正常\");\n} else {\n    print(\"✗ if语句异常\");\n}\n\n// 3. 循环测试\nprint(\"\\n【3】测试循环\");\nfor (let i = 1; i <= 3; i++) {\n    print(\"✓ 循环第 \" + i + \" 次\");\n}\n\n// 4. 函数测试\nprint(\"\\n【4】测试函数\");\nfunction add(a, b) {\n    return a + b;\n}\nlet result = add(5, 3);\nprint(\"✓ 函数调用: 5 + 3 = \" + result);\n\n// 5. 数组测试\nprint(\"\\n【5】测试数组\");\nlet arr = [1, 2, 3];\nprint(\"✓ 数组长度: \" + arr.length);\nprint(\"✓ 数组元素: \" + arr[0] + \", \" + arr[1] + \", \" + arr[2]);\n\n// 6. 对象测试\nprint(\"\\n【6】测试对象\");\nlet obj = { name: \"测试\", value: 100 };\nprint(\"✓ 对象属性: \" + obj.name + \" = \" + obj.value);\n\nprint(\"\\n=== 所有测试完成 ===\");\n",
+  "hotkey": null,
+  "enabled": false
+}
