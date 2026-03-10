@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(cargo build:*)",
-      "Bash(cd F:/free/rust/AutoHotKey-Rust/src-tauri && cargo check 2>&1)",
-      "WebSearch"
-    ]
-  }
-}
