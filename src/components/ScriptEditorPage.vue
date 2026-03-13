@@ -41,8 +41,16 @@
       </el-tabs>
       <div class="resizer" @mousedown="startResize"></div>
       <div class="console" :style="{ height: consoleHeight + 'px' }">
-        <div class="console-header">控制台输出</div>
-        <pre class="console-content">{{ consoleOutput || '等待运行...' }}</pre>
+        <div class="console-header">
+          <span>控制台输出</span>
+          <div class="console-actions">
+            <el-button size="small" text @click="copyConsole" title="复制">📋</el-button>
+            <el-button size="small" text @click="clearConsole" title="清空">🗑️</el-button>
+          </div>
+        </div>
+        <pre class="console-content" ref="consoleRef"><template v-if="consoleLines.length">
+<template v-for="(line, i) in consoleLines" :key="i"><span :class="['console-line', line.type]">{{ line.text }}
+</span></template></template><template v-else>等待运行...</template></pre>
       </div>
     </div>
   </div>
@@ -54,12 +62,20 @@ import { Codemirror } from 'vue-codemirror'
 import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { linter, type Diagnostic } from '@codemirror/lint'
-import { invoke } from '@tauri-apps/api/core'
+import { lineNumbers } from '@codemirror/view'
+import { bracketMatching, foldGutter, foldKeymap } from '@codemirror/language'
+import { search, searchKeymap } from '@codemirror/search'
+import { keymap } from '@codemirror/view'
+import { ahkAutocomplete } from '../utils/ahkCompletions'
 import { listen } from '@tauri-apps/api/event'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { readTextFile } from '@tauri-apps/plugin-fs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, FolderOpened, Document, CaretRight, VideoPlay, MagicStick } from '@element-plus/icons-vue'
+import { type Script } from '../stores/scriptStore'
+import { useScriptStore } from '../stores/scriptStore'
+import { useConfigStore } from '../stores/configStore'
+import { tauriInvoke } from '../utils/tauri'
 
 // 简单的JavaScript语法检查
 const jsLinter = linter((view) => {
@@ -81,16 +97,17 @@ const jsLinter = linter((view) => {
   return diagnostics
 })
 
-const extensions = [javascript(), oneDark, jsLinter]
-
-interface Script {
-  id: string
-  name: string
-  code: string
-  hotkey: string | null
-  enabled: boolean
-  filePath?: string
-}
+const extensions = [
+  javascript(),
+  oneDark,
+  jsLinter,
+  ahkAutocomplete,
+  lineNumbers(),
+  bracketMatching(),
+  foldGutter(),
+  search(),
+  keymap.of([...foldKeymap, ...searchKeymap]),
+]
 
 const currentView = inject<Ref<string>>('currentView')!
 const currentEditingScript = inject<Ref<Script | null>>('currentEditingScript')!
@@ -105,11 +122,47 @@ const tabs = ref<Script[]>([{
 
 const activeTab = ref(tabs.value[0].id)
 const consoleOutput = ref('')
+const consoleRef = ref<HTMLPreElement>()
+
+interface ConsoleLine { text: string; type: 'info' | 'error' }
+const consoleLines = ref<ConsoleLine[]>([])
+
+function timestamp() {
+  const d = new Date()
+  return `[${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}]`
+}
+
+function appendConsole(msg: string, type: 'info' | 'error' = 'info') {
+  consoleLines.value.push({ text: `${timestamp()} ${msg}`, type })
+  // 自动滚动到底部
+  setTimeout(() => {
+    if (consoleRef.value) consoleRef.value.scrollTop = consoleRef.value.scrollHeight
+  }, 0)
+}
+
+const clearConsole = () => { consoleLines.value = [] }
+const copyConsole = () => {
+  const text = consoleLines.value.map(l => l.text).join('\n')
+  navigator.clipboard.writeText(text)
+  ElMessage.success('已复制到剪贴板')
+}
+
 const editorHeight = ref(400)
 const consoleHeight = ref(200)
 const isRunning = ref(false)
 let unlistenOutput: (() => void) | null = null
 let unlistenDone: (() => void) | null = null
+let unlistenMsgBox: (() => void) | null = null
+let unlistenNotify: (() => void) | null = null
+
+// 监听 msgBox / notify 事件
+listen<{ title: string; text: string }>('script-msgbox', (e) => {
+  ElMessageBox.alert(e.payload.text, e.payload.title, { confirmButtonText: '确定' })
+}).then(fn => { unlistenMsgBox = fn })
+
+listen<{ title: string; text: string }>('script-notify', (e) => {
+  ElMessage({ message: `${e.payload.title}: ${e.payload.text}`, type: 'info', duration: 5000 })
+}).then(fn => { unlistenNotify = fn })
 
 const currentTab = computed(() => tabs.value.find(t => t.id === activeTab.value))
 
@@ -157,7 +210,8 @@ const handleSave = async () => {
       currentTab.value.filePath = file
       currentTab.value.name = file.split(/[/\\]/).pop()?.replace('.json', '') || currentTab.value.name
     }
-    await invoke('save_script', { script: currentTab.value })
+    const scriptStore = useScriptStore()
+    await scriptStore.saveScript(currentTab.value)
     ElMessage.success('保存成功')
   } catch (error) {
     ElMessage.error(`保存失败: ${error}`)
@@ -202,23 +256,30 @@ const handleOpen = async () => {
 
 const handleRun = async () => {
   if (!currentTab.value) return
-  consoleOutput.value = ''
+  clearConsole()
   isRunning.value = true
 
   unlistenOutput = await listen<string>('script-output', (e) => {
-    consoleOutput.value += e.payload + '\n'
+    // 检测是否为错误输出（以 [错误] 或 Error 开头）
+    const isError = /^\[错误\]|^\[超时\]|^Error/i.test(e.payload)
+    appendConsole(e.payload, isError ? 'error' : 'info')
   })
   unlistenDone = await listen<string>('script-done', (e) => {
-    if (e.payload) consoleOutput.value += e.payload
+    if (e.payload) {
+      const isError = /错误|error|失败/i.test(e.payload)
+      appendConsole(e.payload, isError ? 'error' : 'info')
+    }
     isRunning.value = false
     unlistenOutput?.(); unlistenOutput = null
     unlistenDone?.(); unlistenDone = null
   })
 
   try {
-    await invoke('execute_script', { code: currentTab.value.code })
+    const configStore = useConfigStore()
+    const timeout = configStore.config.scriptTimeout || undefined
+    await tauriInvoke('execute_script', { code: currentTab.value.code, timeout })
   } catch (error) {
-    consoleOutput.value = `错误: ${error}`
+    appendConsole(`错误: ${error}`, 'error')
     isRunning.value = false
     unlistenOutput?.(); unlistenOutput = null
     unlistenDone?.(); unlistenDone = null
@@ -226,12 +287,14 @@ const handleRun = async () => {
 }
 
 const handleStop = async () => {
-  await invoke('stop_script')
+  await tauriInvoke('stop_script')
 }
 
 onUnmounted(() => {
   unlistenOutput?.()
   unlistenDone?.()
+  unlistenMsgBox?.()
+  unlistenNotify?.()
 })
 
 const handleDebug = () => {
@@ -285,7 +348,7 @@ const handleRename = async (tab: Script) => {
       if (currentEditingScript.value?.id === tab.id) {
         currentEditingScript.value.name = tab.name
       }
-      await invoke('save_script', { script: tab })
+      await tauriInvoke('save_script', { script: tab })
       ElMessage.success('重命名成功')
     }
   } catch (error: any) {
@@ -349,6 +412,14 @@ const handleRename = async (tab: Script) => {
   font-size: 12px;
   font-weight: 600;
   border-bottom: 1px solid #181a1f;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.console-actions {
+  display: flex;
+  gap: 4px;
 }
 
 .console-content {
@@ -361,6 +432,14 @@ const handleRename = async (tab: Script) => {
   overflow-y: auto;
   white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+.console-line.error {
+  color: #f56c6c;
+}
+
+.console-line.info {
+  color: #d4d4d4;
 }
 
 :deep(.el-tabs) {

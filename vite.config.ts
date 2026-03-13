@@ -12,5 +12,9 @@ export default defineConfig({
     watch: {
       ignored: ['**/src-tauri/**']
     }
+  },
+  test: {
+    environment: 'happy-dom',
+    globals: true,
   }
 })

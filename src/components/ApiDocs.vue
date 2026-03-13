@@ -109,6 +109,37 @@ const categories: Category[] = [
         returns: 'void',
         example: 'scrollMouse(500, 400, 3)   // 向上滚动3格\nscrollMouse(500, 400, -3)  // 向下滚动3格',
       },
+      {
+        name: 'getMousePos', signature: 'getMousePos()',
+        desc: '获取当前鼠标光标在屏幕上的坐标位置，返回 JSON 字符串。',
+        params: [],
+        returns: 'string — JSON 格式 {"x":number,"y":number}，失败返回 "{}"',
+        example: 'const pos = JSON.parse(getMousePos())\nprint("鼠标位置: " + pos.x + ", " + pos.y)',
+      },
+      {
+        name: 'doubleClick', signature: 'doubleClick(x, y, button)',
+        desc: '移动鼠标到指定坐标并双击。',
+        params: [
+          { name: 'x', type: 'number', desc: '屏幕横坐标' },
+          { name: 'y', type: 'number', desc: '屏幕纵坐标' },
+          { name: 'button', type: '"left" | "right" | "middle"', desc: '鼠标按键，默认 "left"' },
+        ],
+        returns: 'void',
+        example: 'doubleClick(100, 200, "left")  // 双击打开文件',
+      },
+      {
+        name: 'dragMouse', signature: 'dragMouse(x1, y1, x2, y2, button)',
+        desc: '从起点拖拽鼠标到终点，模拟拖放操作。',
+        params: [
+          { name: 'x1', type: 'number', desc: '起点横坐标' },
+          { name: 'y1', type: 'number', desc: '起点纵坐标' },
+          { name: 'x2', type: 'number', desc: '终点横坐标' },
+          { name: 'y2', type: 'number', desc: '终点纵坐标' },
+          { name: 'button', type: '"left" | "right" | "middle"', desc: '鼠标按键，默认 "left"' },
+        ],
+        returns: 'void',
+        example: 'dragMouse(100, 100, 400, 400, "left")  // 拖拽文件',
+      },
     ]
   },
   {
@@ -308,11 +339,34 @@ const categories: Category[] = [
         example: 'setClipboard("Hello World")\n// 然后可以用 Ctrl+V 粘贴\nkeyDown("ctrl")\nkeyPress("v")\nkeyUp("ctrl")',
       },
       {
-        name: 'msgBox', signature: 'msgBox(text)',
-        desc: '弹出系统消息对话框，脚本会暂停直到用户点击确定。适合调试或提示用户。',
-        params: [{ name: 'text', type: 'string', desc: '要显示的消息内容' }],
+        name: 'msgBox', signature: 'msgBox(title, text)',
+        desc: '弹出消息对话框，用于调试或提示用户。',
+        params: [
+          { name: 'title', type: 'string', desc: '对话框标题' },
+          { name: 'text', type: 'string', desc: '要显示的消息内容' },
+        ],
         returns: 'void',
-        example: 'msgBox("操作完成！")\n\n// 调试用\nconst hwnd = findWindow("记事本")\nmsgBox("找到窗口句柄: " + hwnd)',
+        example: 'msgBox("提示", "操作完成！")',
+      },
+      {
+        name: 'notify', signature: 'notify(title, text)',
+        desc: '发送通知消息到前端。',
+        params: [
+          { name: 'title', type: 'string', desc: '通知标题' },
+          { name: 'text', type: 'string', desc: '通知内容' },
+        ],
+        returns: 'void',
+        example: 'notify("脚本", "任务已完成")',
+      },
+      {
+        name: 'beep', signature: 'beep(freq, duration)',
+        desc: '播放指定频率和时长的蜂鸣声（仅 Windows）。',
+        params: [
+          { name: 'freq', type: 'number', desc: '频率（Hz），如 440' },
+          { name: 'duration', type: 'number', desc: '持续时间（毫秒）' },
+        ],
+        returns: 'void',
+        example: 'beep(440, 500)   // 播放 440Hz 蜂鸣 0.5秒\nbeep(880, 200)',
       },
       {
         name: 'enumWindows', signature: 'enumWindows()',
@@ -342,6 +396,13 @@ const categories: Category[] = [
         example: 'while (!isStopped()) {\n  clickMouse(100, 200, "left")\n  sleep(1000)\n}\nprint("脚本已停止")',
       },
       {
+        name: 'getScreenSize', signature: 'getScreenSize()',
+        desc: '获取主屏幕的分辨率，返回 JSON 字符串。',
+        params: [],
+        returns: 'string — JSON 格式 {"width":number,"height":number}',
+        example: 'const screen = JSON.parse(getScreenSize())\nprint("屏幕分辨率: " + screen.width + "x" + screen.height)',
+      },
+      {
         name: 'print', signature: 'print(msg)',
         desc: '将消息输出到脚本执行结果面板，用于调试和显示状态信息。',
         params: [{ name: 'msg', type: 'string', desc: '要输出的消息' }],
@@ -353,8 +414,80 @@ const categories: Category[] = [
         desc: '将字符或按键名转换为 Windows 虚拟键码，方便配合 postKey 使用，无需手动查表。',
         params: [{ name: 'char', type: 'string', desc: '单个字符或按键名（如 "a"、"enter"、"f1"）' }],
         returns: 'number — 对应的虚拟键码，无法识别返回 0',
-        example: 'const hwnd = findWindow("记事本")\n\n// 用字符名转换，不用记键码\npostKey(hwnd, charToVkCode("enter"))  // Enter 键\npostKey(hwnd, charToVkCode("a"))      // A 键\npostKey(hwnd, charToVkCode("f5"))     // F5 键\npostKey(hwnd, charToVkCode("up"))     // 方向键上\n\n// 批量发送\nfor (const c of ["h","e","l","l","o"]) {\n  postKey(hwnd, charToVkCode(c))\n  sleep(50)\n}',
+        example: 'const hwnd = findWindow("记事本")\n\n// 用字符名转换，不用记键码\npostKey(hwnd, charToVkCode("enter"))  // Enter 键\npostKey(hwnd, charToVkCode("a"))      // A 键',
         notes: '支持的按键名：enter, space, escape/esc, tab, backspace\n方向键：up, down, left, right\n功能键：f1-f12\n字母 a-z、数字 0-9 直接传字符即可',
+      },
+      {
+        name: 'random', signature: 'random(min, max)',
+        desc: '生成指定范围内的随机整数（含两端）。',
+        params: [
+          { name: 'min', type: 'number', desc: '最小值' },
+          { name: 'max', type: 'number', desc: '最大值' },
+        ],
+        returns: 'number — [min, max] 范围内的随机整数',
+        example: 'const delay = random(500, 2000)\nsleep(delay)  // 随机等待 0.5~2 秒',
+      },
+      {
+        name: 'fileExists', signature: 'fileExists(path)',
+        desc: '检查沙箱内指定路径的文件是否存在。',
+        params: [{ name: 'path', type: 'string', desc: '相对于沙箱目录的文件路径' }],
+        returns: 'boolean — 文件存在返回 true',
+        example: 'if (fileExists("config.txt")) {\n  const data = readFile("config.txt")\n  print(data)\n}',
+      },
+      {
+        name: 'waitForPixelColor', signature: 'waitForPixelColor(x, y, color, timeout, tolerance)',
+        desc: '轮询等待指定坐标的像素变为目标颜色，超时返回 false。',
+        params: [
+          { name: 'x', type: 'number', desc: '屏幕横坐标' },
+          { name: 'y', type: 'number', desc: '屏幕纵坐标' },
+          { name: 'color', type: 'string', desc: '目标颜色 "#RRGGBB"' },
+          { name: 'timeout', type: 'number', desc: '超时时间（毫秒）' },
+          { name: 'tolerance', type: 'number', desc: '颜色容差 0-255' },
+        ],
+        returns: 'boolean — 匹配到返回 true，超时返回 false',
+        example: '// 等待按钮变绿（最多5秒）\nif (waitForPixelColor(500, 300, "#00FF00", 5000, 30)) {\n  clickMouse(500, 300, "left")\n}',
+      },
+    ]
+  },
+  {
+    icon: '🚀', name: '进程管理',
+    apis: [
+      {
+        name: 'run', signature: 'run(command)',
+        desc: '执行外部程序，不等待完成，返回进程 ID。',
+        params: [{ name: 'command', type: 'string', desc: '命令行字符串，空格分隔参数' }],
+        returns: 'string — 进程 PID，失败返回 "error:..."',
+        example: 'const pid = run("notepad.exe")\nprint("启动记事本，PID: " + pid)',
+      },
+      {
+        name: 'runWait', signature: 'runWait(command)',
+        desc: '执行外部程序并等待完成，返回退出码和标准输出。',
+        params: [{ name: 'command', type: 'string', desc: '命令行字符串' }],
+        returns: 'string — JSON: {"exitCode":number,"stdout":string}',
+        example: 'const result = JSON.parse(runWait("cmd /c dir"))\nprint("退出码: " + result.exitCode)\nprint(result.stdout)',
+      },
+    ]
+  },
+  {
+    icon: '🌐', name: 'HTTP 请求',
+    apis: [
+      {
+        name: 'httpGet', signature: 'httpGet(url)',
+        desc: '发送 HTTP GET 请求，返回响应文本。',
+        params: [{ name: 'url', type: 'string', desc: '请求 URL' }],
+        returns: 'string — 响应体文本，失败返回 "error:..."',
+        example: 'const data = httpGet("https://api.example.com/data")\nprint(data)',
+      },
+      {
+        name: 'httpPost', signature: 'httpPost(url, body, contentType)',
+        desc: '发送 HTTP POST 请求，返回响应文本。',
+        params: [
+          { name: 'url', type: 'string', desc: '请求 URL' },
+          { name: 'body', type: 'string', desc: '请求体' },
+          { name: 'contentType', type: 'string', desc: 'Content-Type，如 "application/json"' },
+        ],
+        returns: 'string — 响应体文本，失败返回 "error:..."',
+        example: 'const resp = httpPost(\n  "https://api.example.com/submit",\n  JSON.stringify({name: "test"}),\n  "application/json"\n)\nprint(resp)',
       },
     ]
   },

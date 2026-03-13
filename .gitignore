@@ -34,7 +34,7 @@ src-tauri/target/
 src-tauri/Cargo.lock
 
 # Build outputs
-/build/
+/build/n
 /out/
 
 # Environment variables

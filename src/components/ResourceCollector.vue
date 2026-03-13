@@ -136,11 +136,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Camera, Picture } from '@element-plus/icons-vue'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { listen } from '@tauri-apps/api/event'
+import { tauriInvoke } from '../utils/tauri'
 
 interface PixelInfo {
   x: number
@@ -174,7 +174,7 @@ let unlisten: (() => void) | null = null
 const captureScreen = async () => {
   capturing.value = true
   try {
-    const path = await invoke<string>('capture_screen')
+    const path = await tauriInvoke<string>('capture_screen')
     lastCapture.value = path
     ElMessage.success('截图成功！')
   } catch (error) {
@@ -213,7 +213,7 @@ const startPixelCapture = async () => {
 const onSelectionComplete = async (rect: { x: number, y: number, width: number, height: number }) => {
   try {
     captureRect.value = rect
-    const result = await invoke<{ pixels: PixelInfo[], image_base64: string, width: number, height: number }>('capture_pixels', {
+    const result = await tauriInvoke<{ pixels: PixelInfo[], image_base64: string, width: number, height: number }>('capture_pixels', {
       x: rect.x,
       y: rect.y,
       width: rect.width,
@@ -307,7 +307,7 @@ const handleMouseDown = async (e: MouseEvent) => {
   const clickedIndex = capturedPixels.value.findIndex(pixel => {
     const px = (pixel.x - captureRect.value.x - canvasOffset.value.startX) * pixelSize.value
     const py = (pixel.y - captureRect.value.y - canvasOffset.value.startY) * pixelSize.value
-    return Math.sqrt((canvasX - px) ** 2 + (canvasY - py) ** 2) < pixelSize.value
+    return canvasX >= px && canvasX < px + pixelSize.value && canvasY >= py && canvasY < py + pixelSize.value
   })
 
   if (clickedIndex !== -1) {
@@ -323,7 +323,7 @@ const handleMouseDown = async (e: MouseEvent) => {
     capturedPixels.value[selectedPixelIndex.value].y = newY
 
     try {
-      const result = await invoke<PixelInfo>('get_pixel_color', { x: newX, y: newY })
+      const result = await tauriInvoke<PixelInfo>('get_pixel_color', { x: newX, y: newY })
       capturedPixels.value[selectedPixelIndex.value].r = result.r
       capturedPixels.value[selectedPixelIndex.value].g = result.g
       capturedPixels.value[selectedPixelIndex.value].b = result.b
@@ -354,7 +354,7 @@ const savePattern = async () => {
         b: pixel.b
       }))
     }
-    await invoke('save_pixel_pattern', { pattern })
+    await tauriInvoke('save_pixel_pattern', { pattern })
     ElMessage.success('模板保存成功！')
     patternName.value = ''
     loadPatterns()
@@ -365,7 +365,7 @@ const savePattern = async () => {
 
 const loadPatterns = async () => {
   try {
-    patterns.value = await invoke<PixelPattern[]>('load_pixel_patterns')
+    patterns.value = await tauriInvoke<PixelPattern[]>('load_pixel_patterns') || []
   } catch (error) {
     ElMessage.error(`加载失败: ${error}`)
   }
@@ -374,7 +374,7 @@ const loadPatterns = async () => {
 const deletePattern = async (name: string) => {
   try {
     await ElMessageBox.confirm(`确定删除模板"${name}"吗？`, '确认删除', { type: 'warning' })
-    await invoke('delete_pixel_pattern', { name })
+    await tauriInvoke('delete_pixel_pattern', { name })
     ElMessage.success('删除成功！')
     loadPatterns()
   } catch (error: any) {
@@ -391,7 +391,7 @@ const findPattern = async (pattern: PixelPattern) => {
       inputPattern: /^\d+$/,
       inputErrorMessage: '请输入0-255之间的数字'
     })
-    const results = await invoke<{ x: number, y: number }[]>('find_pixel_pattern', {
+    const results = await tauriInvoke<{ x: number, y: number }[]>('find_pixel_pattern', {
       pattern,
       tolerance: Number(tolerance.value)
     })

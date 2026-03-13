@@ -27,15 +27,7 @@ import ScriptManager from './components/ScriptManager.vue'
 import ScriptEditorPage from './components/ScriptEditorPage.vue'
 import Settings from './components/Settings.vue'
 import ApiDocs from './components/ApiDocs.vue'
-
-interface Script {
-  id: string
-  name: string
-  code: string
-  hotkey: string | null
-  enabled: boolean
-  filePath?: string
-}
+import { type Script } from './stores/scriptStore'
 
 const currentView = ref('script')
 const currentEditingScript = ref<Script | null>(null)
