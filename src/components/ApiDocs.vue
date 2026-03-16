@@ -3,6 +3,7 @@
     <!-- 左侧目录 -->
     <aside class="api-sidebar">
       <input v-model="search" class="search-input" placeholder="🔍 搜索 API..." />
+      <div v-if="search && matchCount > 0" class="search-count">找到 {{ matchCount }} 个 API</div>
       <div v-for="cat in filteredCategories" :key="cat.name" class="cat-group">
         <div class="cat-title" @click="toggleCat(cat.name)">
           <span>{{ cat.name }}</span>
@@ -15,7 +16,7 @@
             :class="['api-link', { active: selected?.name === api.name }]"
             @click="selected = api"
           >
-            <div class="api-link-name">{{ api.name }}</div>
+            <div class="api-link-name" v-html="highlightName(api.name)"></div>
             <div class="api-link-desc">{{ api.desc.slice(0, 18) }}...</div>
           </div>
         </template>
@@ -56,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 
 interface Param { name: string; type: string; desc: string }
 interface Api {
@@ -658,9 +659,38 @@ const filteredCategories = computed(() => {
   if (!search.value) return categories
   const q = search.value.toLowerCase()
   return categories
-    .map(cat => ({ ...cat, apis: cat.apis.filter(a => a.name.toLowerCase().includes(q) || a.desc.includes(q)) }))
+    .map(cat => ({
+      ...cat,
+      apis: cat.apis.filter(a =>
+        a.name.toLowerCase().includes(q) ||
+        a.signature.toLowerCase().includes(q) ||
+        a.desc.toLowerCase().includes(q)
+      )
+    }))
     .filter(cat => cat.apis.length > 0)
 })
+
+const matchCount = computed(() => {
+  return filteredCategories.value.reduce((sum, cat) => sum + cat.apis.length, 0)
+})
+
+// 搜索时自动展开匹配分类
+watch(search, (val) => {
+  if (val) {
+    // 搜索时展开所有匹配的分类
+    for (const cat of filteredCategories.value) {
+      collapsed.value.delete(cat.name)
+    }
+    collapsed.value = new Set(collapsed.value)
+  }
+})
+
+function highlightName(name: string): string {
+  if (!search.value) return name
+  const q = search.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const regex = new RegExp(`(${q})`, 'gi')
+  return name.replace(regex, '<mark>$1</mark>')
+}
 </script>
 
 <style scoped>
@@ -668,41 +698,51 @@ const filteredCategories = computed(() => {
 
 .api-sidebar {
   width: 160px; min-width: 160px; overflow-y: auto;
-  border-right: 1px solid #d0eeec; padding: 8px 0; background: #f0fafa;
+  border-right: 1px solid var(--miku-lighter); padding: 8px 0; background: var(--miku-bg);
 }
 .search-input {
   width: calc(100% - 16px); margin: 4px 8px 8px; padding: 5px 8px;
-  border: 1px solid #b2dfdb; border-radius: 4px; font-size: 12px;
-  background: white; color: #333; outline: none;
+  border: 1px solid #b2dfdb; border-radius: var(--radius-sm); font-size: 12px;
+  background: white; color: var(--text-primary); outline: none;
 }
-.search-input:focus { border-color: #39C5BB; }
-.cat-title { padding: 10px 12px 6px; font-size: 13px; color: #1ABC9C; font-weight: bold; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
-.cat-title:hover { background: #e0f7f5; }
+.search-input:focus { border-color: var(--miku-primary); }
+.search-count {
+  padding: 2px 12px 6px; font-size: 11px; color: var(--miku-dark); font-weight: 500;
+}
+.cat-title { padding: 10px 12px 6px; font-size: 13px; color: var(--miku-dark); font-weight: bold; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
+.cat-title:hover { background: var(--miku-lighter); }
 .cat-arrow { font-size: 10px; color: #aaa; }
 .api-link {
-  padding: 5px 12px 5px 20px; cursor: pointer;
+  padding: 5px 12px 5px 20px; cursor: pointer; transition: background var(--transition-fast);
 }
-.api-link:hover { background: #e0f7f5; }
-.api-link.active { background: #c8f0ec; border-left: 3px solid #39C5BB; }
-.api-link-name { color: #333; font-size: 12px; font-weight: 500; }
-.api-link.active .api-link-name { color: #1ABC9C; font-weight: bold; }
+.api-link:hover { background: var(--miku-lighter); }
+.api-link.active { background: #c8f0ec; border-left: 3px solid var(--miku-primary); }
+.api-link-name { color: var(--text-primary); font-size: 12px; font-weight: 500; }
+.api-link.active .api-link-name { color: var(--miku-dark); font-weight: bold; }
 .api-link-desc { color: #999; font-size: 11px; margin-top: 1px; }
 
-.api-detail { flex: 1; overflow-y: auto; padding: 24px 28px; color: #333; }
+:deep(mark) {
+  background: #fff3b0;
+  color: var(--miku-dark);
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+.api-detail { flex: 1; overflow-y: auto; padding: 24px 28px; color: var(--text-primary); }
 .api-detail.empty { display: flex; align-items: center; justify-content: center; color: #aaa; }
 
-.fn-name { font-family: monospace; font-size: 18px; color: #1ABC9C; margin-bottom: 8px; }
-.fn-desc { color: #555; line-height: 1.6; margin-bottom: 16px; }
+.fn-name { font-family: monospace; font-size: 18px; color: var(--miku-dark); margin-bottom: 8px; }
+.fn-desc { color: var(--text-regular); line-height: 1.6; margin-bottom: 16px; }
 
-.section-title { font-size: 11px; text-transform: uppercase; color: #39C5BB; letter-spacing: 1px; margin: 16px 0 8px; border-bottom: 1px solid #d0eeec; padding-bottom: 4px; }
+.section-title { font-size: 11px; text-transform: uppercase; color: var(--miku-primary); letter-spacing: 1px; margin: 16px 0 8px; border-bottom: 1px solid var(--miku-lighter); padding-bottom: 4px; }
 
 .params-table { width: 100%; border-collapse: collapse; }
-.params-table td { padding: 5px 8px; vertical-align: top; border-bottom: 1px solid #f0fafa; }
+.params-table td { padding: 5px 8px; vertical-align: top; border-bottom: 1px solid var(--miku-bg); }
 .pname { font-family: monospace; color: #e67e22; width: 130px; }
 .ptype { font-family: monospace; color: #27ae60; width: 200px; font-size: 12px; }
-.pdesc { color: #555; }
+.pdesc { color: var(--text-regular); }
 
 .returns { font-family: monospace; color: #27ae60; font-size: 12px; }
-.example { background: #1e2a2a; color: #e0f7f5; padding: 12px; border-radius: 6px; font-size: 12px; line-height: 1.6; overflow-x: auto; white-space: pre; }
-.notes { color: #666; font-size: 12px; line-height: 1.6; background: #f0fafa; padding: 8px 12px; border-left: 3px solid #39C5BB; border-radius: 2px; white-space: pre-line; }
+.example { background: #1e2a2a; color: var(--miku-lighter); padding: 12px; border-radius: var(--radius-sm); font-size: 12px; line-height: 1.6; overflow-x: auto; white-space: pre; }
+.notes { color: #666; font-size: 12px; line-height: 1.6; background: var(--miku-bg); padding: 8px 12px; border-left: 3px solid var(--miku-primary); border-radius: 2px; white-space: pre-line; }
 </style>

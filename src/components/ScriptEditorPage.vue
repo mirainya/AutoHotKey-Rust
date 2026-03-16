@@ -487,7 +487,7 @@ const handleRename = async (tab: Script) => {
 }
 
 .resizer:hover {
-  background: #39C5BB;
+  background: var(--miku-primary);
 }
 
 .console {

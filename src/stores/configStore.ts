@@ -7,6 +7,9 @@ export interface AppConfig {
   autoLoad: boolean
   autoHotkey: boolean
   scriptTimeout: number
+  editorFontSize: number
+  editorTabSize: number
+  consoleFontSize: number
 }
 
 const STORAGE_KEY = 'ahk_rust_config'
@@ -16,6 +19,9 @@ const defaults: AppConfig = {
   autoLoad: true,
   autoHotkey: false,
   scriptTimeout: 0,
+  editorFontSize: 14,
+  editorTabSize: 2,
+  consoleFontSize: 13,
 }
 
 export const useConfigStore = defineStore('config', () => {

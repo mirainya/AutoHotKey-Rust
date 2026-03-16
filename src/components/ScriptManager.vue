@@ -1,7 +1,7 @@
 <template>
   <div class="script-manager">
     <div class="header">
-      <h2>📝 脚本管理</h2>
+      <h2 class="page-title">📝 脚本管理</h2>
       <div class="header-buttons">
         <el-input
           v-model="searchQuery"
@@ -35,13 +35,30 @@
           <el-switch v-model="row.enabled" @change="saveScript(row)" />
         </template>
       </el-table-column>
-      <el-table-column label="操作">
+      <el-table-column label="操作" width="220">
         <template #default="{ row }">
           <el-button size="small" @click="editScript(row)">编辑</el-button>
-          <el-button size="small" :loading="store.runningId === row.id" @click="runScript(row)">运行</el-button>
-          <el-button size="small" type="warning" v-if="store.runningId === row.id" @click="store.stopScript()">停止</el-button>
-          <el-button size="small" @click="exportScript(row)">导出</el-button>
-          <el-button size="small" type="danger" @click="deleteScript(row)">删除</el-button>
+          <el-button
+            v-if="store.runningId === row.id"
+            size="small"
+            type="warning"
+            @click="store.stopScript()"
+          >停止</el-button>
+          <el-button
+            v-else
+            size="small"
+            :loading="store.runningId === row.id"
+            @click="runScript(row)"
+          >运行</el-button>
+          <el-dropdown trigger="click" @command="(cmd: string) => handleMoreCommand(cmd, row)">
+            <el-button size="small" text>···</el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="export">📤 导出</el-dropdown-item>
+                <el-dropdown-item command="delete" divided>🗑️ 删除</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </template>
       </el-table-column>
     </el-table>
@@ -142,6 +159,11 @@ const importScript = async () => {
   }
 }
 
+const handleMoreCommand = (command: string, script: Script) => {
+  if (command === 'export') exportScript(script)
+  else if (command === 'delete') deleteScript(script)
+}
+
 const recordHotkey = (event: KeyboardEvent, script: Script) => {
   event.preventDefault()
   const oldHotkey = script.hotkey
@@ -202,11 +224,25 @@ onUnmounted(() => {
   margin-bottom: 20px;
 }
 
-.header h2 {
+.page-title {
   margin: 0;
-  color: #39C5BB;
+  color: var(--miku-primary);
   font-size: 24px;
   font-weight: 600;
+  position: relative;
+  display: inline-block;
+  padding-bottom: 10px;
+}
+
+.page-title::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, var(--miku-primary), var(--miku-light), transparent);
+  border-radius: 1px;
 }
 
 .header-buttons {
@@ -216,26 +252,29 @@ onUnmounted(() => {
 
 :deep(.el-table) {
   background: rgba(255, 255, 255, 0.95);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
 
 :deep(.el-table th) {
-  background: linear-gradient(135deg, #7FDBDA, #39C5BB);
+  background: linear-gradient(135deg, var(--miku-light), var(--miku-primary));
   color: white;
   font-weight: 600;
 }
 
 :deep(.el-input__inner) {
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 :deep(.el-button--primary) {
-  background: linear-gradient(135deg, #39C5BB, #1ABC9C);
+  background: linear-gradient(135deg, var(--miku-primary), var(--miku-dark));
   border: none;
 }
 
 :deep(.el-button--primary:hover) {
-  background: linear-gradient(135deg, #7FDBDA, #39C5BB);
+  background: linear-gradient(135deg, var(--miku-light), var(--miku-primary));
+  box-shadow: var(--shadow-hover);
+  transform: translateY(-1px);
 }
 </style>

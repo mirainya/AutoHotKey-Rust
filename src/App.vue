@@ -12,10 +12,13 @@
           {{ item.icon }} {{ item.label }}
         </div>
       </nav>
+      <div class="sidebar-footer">v0.1.0</div>
     </aside>
 
     <main class="content">
-      <component :is="currentComponent" />
+      <Transition name="page-fade" mode="out-in">
+        <component :is="currentComponent" :key="currentView" />
+      </Transition>
     </main>
   </div>
 </template>
@@ -61,5 +64,75 @@ const currentComponent = computed(() => {
   display: flex;
   height: 100vh;
   overflow: hidden;
+}
+
+.sidebar {
+  width: 200px;
+  background: linear-gradient(180deg, var(--miku-primary) 0%, var(--miku-dark) 100%);
+  color: white;
+  display: flex;
+  flex-direction: column;
+}
+
+.logo {
+  padding: 24px 20px;
+  font-size: 16px;
+  font-weight: bold;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.nav-menu {
+  flex: 1;
+  padding: 20px 0;
+}
+
+.nav-item {
+  padding: 16px 24px;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  border-left: 4px solid transparent;
+}
+
+.nav-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-left-color: white;
+  transform: translateX(2px);
+}
+
+.nav-item.active {
+  background: rgba(255, 255, 255, 0.2);
+  border-left-color: white;
+  font-weight: bold;
+}
+
+.sidebar-footer {
+  padding: 12px 20px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  text-align: center;
+}
+
+.content {
+  flex: 1;
+  padding: 32px;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+/* 页面过渡动画 */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 </style>

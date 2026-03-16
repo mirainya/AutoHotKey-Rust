@@ -443,12 +443,27 @@ onUnmounted(() => {
   margin: 0;
   font-size: 24px;
   font-weight: 600;
-  color: #303133;
+  color: var(--miku-primary);
+  position: relative;
+  display: inline-block;
+  padding-bottom: 10px;
+}
+
+.page-title::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, var(--miku-primary), var(--miku-light), transparent);
+  border-radius: 1px;
 }
 
 /* 功能卡片 */
 .function-card {
   margin-bottom: 20px;
+  border-radius: var(--radius-md);
 }
 
 .function-card:last-child {
@@ -494,15 +509,15 @@ onUnmounted(() => {
 
 .control-label {
   font-size: 14px;
-  color: #606266;
+  color: var(--text-regular);
   font-weight: 500;
 }
 
 .capture-result {
   margin-top: 20px;
   padding: 16px;
-  background: #f5f7fa;
-  border-radius: 8px;
+  background: var(--miku-bg);
+  border-radius: var(--radius-md);
 }
 
 .save-pattern-row {
@@ -573,7 +588,7 @@ onUnmounted(() => {
 }
 
 .info-item .label {
-  color: #909399;
+  color: var(--text-secondary);
   font-size: 14px;
 }
 
