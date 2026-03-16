@@ -36,6 +36,7 @@
           <Codemirror
             v-model="tab.code"
             :extensions="extensions"
+            @ready="(payload: any) => { cmView = payload.view }"
           />
         </el-tab-pane>
       </el-tabs>
@@ -43,13 +44,19 @@
       <div class="console" :style="{ height: consoleHeight + 'px' }">
         <div class="console-header">
           <span>控制台输出</span>
+          <div class="console-filters">
+            <el-button size="small" :type="consoleFilter === 'all' ? 'primary' : ''" text @click="consoleFilter = 'all'">全部</el-button>
+            <el-button size="small" :type="consoleFilter === 'error' ? 'danger' : ''" text @click="consoleFilter = 'error'">错误</el-button>
+            <el-button size="small" :type="consoleFilter === 'warn' ? 'warning' : ''" text @click="consoleFilter = 'warn'">警告</el-button>
+            <el-button size="small" :type="consoleFilter === 'debug' ? 'info' : ''" text @click="consoleFilter = 'debug'">调试</el-button>
+          </div>
           <div class="console-actions">
             <el-button size="small" text @click="copyConsole" title="复制">📋</el-button>
             <el-button size="small" text @click="clearConsole" title="清空">🗑️</el-button>
           </div>
         </div>
-        <pre class="console-content" ref="consoleRef"><template v-if="consoleLines.length">
-<template v-for="(line, i) in consoleLines" :key="i"><span :class="['console-line', line.type]">{{ line.text }}
+        <pre class="console-content" ref="consoleRef"><template v-if="filteredConsoleLines.length">
+<template v-for="(line, i) in filteredConsoleLines" :key="i"><span :class="['console-line', line.type]">{{ line.text }}
 </span></template></template><template v-else>等待运行...</template></pre>
       </div>
     </div>
@@ -57,15 +64,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, inject, watch, onUnmounted, type Ref, computed } from 'vue'
+import { ref, inject, watch, onUnmounted, type Ref, computed, shallowRef } from 'vue'
 import { Codemirror } from 'vue-codemirror'
 import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { linter, type Diagnostic } from '@codemirror/lint'
-import { lineNumbers } from '@codemirror/view'
+import { lineNumbers, Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import { bracketMatching, foldGutter, foldKeymap } from '@codemirror/language'
 import { search, searchKeymap } from '@codemirror/search'
 import { keymap } from '@codemirror/view'
+import { StateEffect, StateField } from '@codemirror/state'
 import { ahkAutocomplete } from '../utils/ahkCompletions'
 import { listen } from '@tauri-apps/api/event'
 import { open, save } from '@tauri-apps/plugin-dialog'
@@ -77,30 +85,56 @@ import { useScriptStore } from '../stores/scriptStore'
 import { useConfigStore } from '../stores/configStore'
 import { tauriInvoke } from '../utils/tauri'
 
-// 简单的JavaScript语法检查
-const jsLinter = linter((view) => {
-  const diagnostics: Diagnostic[] = []
-  const code = view.state.doc.toString()
-
-  // 检查未闭合的括号
-  const openBrackets = (code.match(/\{/g) || []).length
-  const closeBrackets = (code.match(/\}/g) || []).length
-  if (openBrackets !== closeBrackets) {
-    diagnostics.push({
-      from: 0,
-      to: code.length,
-      severity: 'error',
-      message: '括号未闭合'
-    })
+// 错误行高亮 decoration
+const setErrorLine = StateEffect.define<number | null>()
+const errorLineField = StateField.define<DecorationSet>({
+  create() { return Decoration.none },
+  update(deco, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setErrorLine)) {
+        if (e.value === null) return Decoration.none
+        const line = tr.state.doc.line(Math.min(e.value, tr.state.doc.lines))
+        return Decoration.set([
+          Decoration.line({ class: 'cm-error-line' }).range(line.from)
+        ])
+      }
+    }
+    return deco
   }
-
-  return diagnostics
 })
+
+// 后端语法检查 linter（防抖 500ms）
+const backendLinter = linter(async (view) => {
+  const code = view.state.doc.toString()
+  if (!code.trim()) return []
+  try {
+    await tauriInvoke('check_script_syntax', { code })
+    return []
+  } catch (err: any) {
+    const error = typeof err === 'string' ? JSON.parse(err) : err
+    if (error.line) {
+      const line = Math.min(error.line, view.state.doc.lines)
+      const lineObj = view.state.doc.line(line)
+      return [{
+        from: lineObj.from,
+        to: lineObj.to,
+        severity: 'error' as const,
+        message: error.message || String(err)
+      }]
+    }
+    return [{
+      from: 0, to: Math.min(code.length, 1),
+      severity: 'error' as const,
+      message: error.message || String(err)
+    }]
+  }
+}, { delay: 500 })
 
 const extensions = [
   javascript(),
   oneDark,
-  jsLinter,
+  backendLinter,
+  errorLineField,
   ahkAutocomplete,
   lineNumbers(),
   bracketMatching(),
@@ -124,15 +158,16 @@ const activeTab = ref(tabs.value[0].id)
 const consoleOutput = ref('')
 const consoleRef = ref<HTMLPreElement>()
 
-interface ConsoleLine { text: string; type: 'info' | 'error' }
+interface ConsoleLine { text: string; type: 'info' | 'warn' | 'error' | 'debug' | 'timing' }
 const consoleLines = ref<ConsoleLine[]>([])
+const consoleFilter = ref<string>('all')
 
 function timestamp() {
   const d = new Date()
   return `[${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}]`
 }
 
-function appendConsole(msg: string, type: 'info' | 'error' = 'info') {
+function appendConsole(msg: string, type: ConsoleLine['type'] = 'info') {
   consoleLines.value.push({ text: `${timestamp()} ${msg}`, type })
   // 自动滚动到底部
   setTimeout(() => {
@@ -141,6 +176,10 @@ function appendConsole(msg: string, type: 'info' | 'error' = 'info') {
 }
 
 const clearConsole = () => { consoleLines.value = [] }
+const filteredConsoleLines = computed(() => {
+  if (consoleFilter.value === 'all') return consoleLines.value
+  return consoleLines.value.filter(l => l.type === consoleFilter.value)
+})
 const copyConsole = () => {
   const text = consoleLines.value.map(l => l.text).join('\n')
   navigator.clipboard.writeText(text)
@@ -154,6 +193,8 @@ let unlistenOutput: (() => void) | null = null
 let unlistenDone: (() => void) | null = null
 let unlistenMsgBox: (() => void) | null = null
 let unlistenNotify: (() => void) | null = null
+let unlistenWarn: (() => void) | null = null
+let unlistenDebug: (() => void) | null = null
 
 // 监听 msgBox / notify 事件
 listen<{ title: string; text: string }>('script-msgbox', (e) => {
@@ -163,6 +204,15 @@ listen<{ title: string; text: string }>('script-msgbox', (e) => {
 listen<{ title: string; text: string }>('script-notify', (e) => {
   ElMessage({ message: `${e.payload.title}: ${e.payload.text}`, type: 'info', duration: 5000 })
 }).then(fn => { unlistenNotify = fn })
+
+// 监听 warn / debug 事件
+listen<string>('script-output-warn', (e) => {
+  appendConsole(e.payload, 'warn')
+}).then(fn => { unlistenWarn = fn })
+
+listen<string>('script-output-debug', (e) => {
+  appendConsole(e.payload, 'debug')
+}).then(fn => { unlistenDebug = fn })
 
 const currentTab = computed(() => tabs.value.find(t => t.id === activeTab.value))
 
@@ -254,20 +304,49 @@ const handleOpen = async () => {
   }
 }
 
+// 保存 EditorView 引用，用于错误行高亮
+const cmView = shallowRef<EditorView | null>(null)
+
+function clearErrorLine() {
+  if (cmView.value) {
+    cmView.value.dispatch({ effects: setErrorLine.of(null) })
+  }
+}
+
+function highlightErrorLine(line: number) {
+  if (cmView.value && line > 0) {
+    cmView.value.dispatch({ effects: setErrorLine.of(line) })
+  }
+}
+
 const handleRun = async () => {
   if (!currentTab.value) return
   clearConsole()
+  clearErrorLine()
   isRunning.value = true
 
   unlistenOutput = await listen<string>('script-output', (e) => {
-    // 检测是否为错误输出（以 [错误] 或 Error 开头）
     const isError = /^\[错误\]|^\[超时\]|^Error/i.test(e.payload)
     appendConsole(e.payload, isError ? 'error' : 'info')
   })
-  unlistenDone = await listen<string>('script-done', (e) => {
-    if (e.payload) {
-      const isError = /错误|error|失败/i.test(e.payload)
-      appendConsole(e.payload, isError ? 'error' : 'info')
+
+  interface ScriptDonePayload {
+    success: boolean
+    elapsed_ms?: number
+    error?: { message: string; line?: number; column?: number }
+  }
+
+  unlistenDone = await listen<ScriptDonePayload>('script-done', (e) => {
+    const p = e.payload
+    if (p.success) {
+      appendConsole(`✓ 执行完成 (${p.elapsed_ms ?? 0}ms)`, 'timing')
+    } else {
+      const err = p.error
+      if (err) {
+        const loc = err.line ? ` (第 ${err.line} 行)` : ''
+        appendConsole(`✗ ${err.message}${loc} (${p.elapsed_ms ?? 0}ms)`, 'error')
+        if (err.line) highlightErrorLine(err.line)
+      }
     }
     isRunning.value = false
     unlistenOutput?.(); unlistenOutput = null
@@ -295,14 +374,27 @@ onUnmounted(() => {
   unlistenDone?.()
   unlistenMsgBox?.()
   unlistenNotify?.()
+  unlistenWarn?.()
+  unlistenDebug?.()
 })
 
-const handleDebug = () => {
+const handleDebug = async () => {
   if (!currentTab.value) return
-  console.log('=== 调试信息 ===')
-  console.log('脚本内容:', currentTab.value.code)
-  console.log('脚本长度:', currentTab.value.code.length)
-  ElMessage.info('调试信息已输出到控制台')
+  clearConsole()
+  clearErrorLine()
+  appendConsole('语法检查中...', 'debug')
+  try {
+    await tauriInvoke('check_script_syntax', { code: currentTab.value.code })
+    appendConsole('✓ 语法检查通过', 'timing')
+    // 无断点时等同于普通运行
+    handleRun()
+  } catch (err: any) {
+    let error: any
+    try { error = typeof err === 'string' ? JSON.parse(err) : err } catch { error = { message: String(err) } }
+    const loc = error.line ? ` (第 ${error.line} 行)` : ''
+    appendConsole(`✗ 语法错误: ${error.message}${loc}`, 'error')
+    if (error.line) highlightErrorLine(error.line)
+  }
 }
 
 const handleFormat = () => {
@@ -415,6 +507,12 @@ const handleRename = async (tab: Script) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
+}
+
+.console-filters {
+  display: flex;
+  gap: 2px;
 }
 
 .console-actions {
@@ -436,6 +534,18 @@ const handleRename = async (tab: Script) => {
 
 .console-line.error {
   color: #f56c6c;
+}
+
+.console-line.warn {
+  color: #e6a23c;
+}
+
+.console-line.debug {
+  color: #909399;
+}
+
+.console-line.timing {
+  color: #67c23a;
 }
 
 .console-line.info {
@@ -473,5 +583,9 @@ const handleRename = async (tab: Script) => {
   font-family: 'Consolas', 'Microsoft YaHei', 'SimHei', 'Monaco', 'Courier New', monospace;
   font-size: 14px;
   line-height: 1.6;
+}
+
+:deep(.cm-error-line) {
+  background: rgba(245, 108, 108, 0.15);
 }
 </style>

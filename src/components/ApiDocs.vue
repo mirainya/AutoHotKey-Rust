@@ -369,6 +369,13 @@ const categories: Category[] = [
         example: 'beep(440, 500)   // 播放 440Hz 蜂鸣 0.5秒\nbeep(880, 200)',
       },
       {
+        name: 'playSound', signature: 'playSound(path)',
+        desc: '播放指定路径的 WAV 音频文件（仅 Windows）。异步播放，不阻塞脚本。',
+        params: [{ name: 'path', type: 'string', desc: 'WAV 文件的完整路径' }],
+        returns: 'void',
+        example: 'playSound("C:\\\\Windows\\\\Media\\\\notify.wav")',
+      },
+      {
         name: 'enumWindows', signature: 'enumWindows()',
         desc: '枚举所有可见窗口，返回窗口信息列表，可用于查找目标窗口的句柄。',
         params: [],
@@ -396,18 +403,25 @@ const categories: Category[] = [
         example: 'while (!isStopped()) {\n  clickMouse(100, 200, "left")\n  sleep(1000)\n}\nprint("脚本已停止")',
       },
       {
-        name: 'getScreenSize', signature: 'getScreenSize()',
-        desc: '获取主屏幕的分辨率，返回 JSON 字符串。',
-        params: [],
-        returns: 'string — JSON 格式 {"width":number,"height":number}',
-        example: 'const screen = JSON.parse(getScreenSize())\nprint("屏幕分辨率: " + screen.width + "x" + screen.height)',
-      },
-      {
         name: 'print', signature: 'print(msg)',
         desc: '将消息输出到脚本执行结果面板，用于调试和显示状态信息。',
         params: [{ name: 'msg', type: 'string', desc: '要输出的消息' }],
         returns: 'void',
         example: 'print("开始执行...")\nconst hwnd = findWindow("记事本")\nprint("窗口句柄: " + hwnd)',
+      },
+      {
+        name: 'warn', signature: 'warn(msg)',
+        desc: '输出警告信息到控制台（黄色显示），用于提示潜在问题。',
+        params: [{ name: 'msg', type: 'string', desc: '警告消息' }],
+        returns: 'void',
+        example: 'warn("窗口未找到，将重试...")',
+      },
+      {
+        name: 'debug', signature: 'debug(msg)',
+        desc: '输出调试信息到控制台（灰色显示），可通过过滤按钮隐藏。',
+        params: [{ name: 'msg', type: 'string', desc: '调试消息' }],
+        returns: 'void',
+        example: 'debug("当前坐标: " + JSON.stringify(getMousePos()))',
       },
       {
         name: 'charToVkCode', signature: 'charToVkCode(char)',
@@ -428,13 +442,6 @@ const categories: Category[] = [
         example: 'const delay = random(500, 2000)\nsleep(delay)  // 随机等待 0.5~2 秒',
       },
       {
-        name: 'fileExists', signature: 'fileExists(path)',
-        desc: '检查沙箱内指定路径的文件是否存在。',
-        params: [{ name: 'path', type: 'string', desc: '相对于沙箱目录的文件路径' }],
-        returns: 'boolean — 文件存在返回 true',
-        example: 'if (fileExists("config.txt")) {\n  const data = readFile("config.txt")\n  print(data)\n}',
-      },
-      {
         name: 'waitForPixelColor', signature: 'waitForPixelColor(x, y, color, timeout, tolerance)',
         desc: '轮询等待指定坐标的像素变为目标颜色，超时返回 false。',
         params: [
@@ -446,6 +453,45 @@ const categories: Category[] = [
         ],
         returns: 'boolean — 匹配到返回 true，超时返回 false',
         example: '// 等待按钮变绿（最多5秒）\nif (waitForPixelColor(500, 300, "#00FF00", 5000, 30)) {\n  clickMouse(500, 300, "left")\n}',
+      },
+      {
+        name: 'getEnv', signature: 'getEnv(name)',
+        desc: '读取系统环境变量的值。',
+        params: [{ name: 'name', type: 'string', desc: '环境变量名，如 "PATH"、"USERNAME"' }],
+        returns: 'string — 环境变量值，不存在返回空字符串',
+        example: 'const user = getEnv("USERNAME")\nprint("当前用户: " + user)\n\nconst home = getEnv("USERPROFILE")\nprint("用户目录: " + home)',
+      },
+      {
+        name: 'getDateTime', signature: 'getDateTime()',
+        desc: '获取当前本地时间，格式为 "YYYY-MM-DD HH:MM:SS"。',
+        params: [],
+        returns: 'string — 格式化的时间字符串',
+        example: 'const now = getDateTime()\nprint("当前时间: " + now)\n// 输出: 当前时间: 2025-01-15 14:30:00',
+      },
+      {
+        name: 'getTimestamp', signature: 'getTimestamp()',
+        desc: '获取当前毫秒级 Unix 时间戳，适合用于计时和性能测量。',
+        params: [],
+        returns: 'number — 毫秒级时间戳',
+        example: 'const start = getTimestamp()\n// ... 执行操作 ...\nsleep(1000)\nconst elapsed = getTimestamp() - start\nprint("耗时: " + elapsed + "ms")',
+      },
+      {
+        name: 'include', signature: 'include(path)',
+        desc: '加载沙箱内脚本文件的内容，返回代码字符串。配合 eval() 使用可实现脚本复用。',
+        params: [{ name: 'path', type: 'string', desc: '相对于沙箱目录的脚本文件路径' }],
+        returns: 'string — 文件内容，失败返回空字符串',
+        example: '// 加载并执行公共函数库\nconst lib = include("utils.js")\nif (lib) eval(lib)\n\n// 之后就可以调用 utils.js 中定义的函数了',
+        notes: '文件路径限制在沙箱目录内，不允许包含 ".." 路径穿越。',
+      },
+      {
+        name: 'waitForWindow', signature: 'waitForWindow(title, timeout)',
+        desc: '等待指定标题的窗口出现，超时返回 0（仅 Windows）。',
+        params: [
+          { name: 'title', type: 'string', desc: '窗口标题' },
+          { name: 'timeout', type: 'number', desc: '超时时间（毫秒）' },
+        ],
+        returns: 'number — 窗口句柄，超时返回 0',
+        example: '// 启动记事本并等待窗口出现\nrun("notepad.exe")\nconst hwnd = waitForWindow("无标题 - 记事本", 5000)\nif (hwnd) {\n  activateWindow(hwnd)\n  typeText("Hello!")\n}',
       },
     ]
   },
@@ -465,6 +511,20 @@ const categories: Category[] = [
         params: [{ name: 'command', type: 'string', desc: '命令行字符串' }],
         returns: 'string — JSON: {"exitCode":number,"stdout":string}',
         example: 'const result = JSON.parse(runWait("cmd /c dir"))\nprint("退出码: " + result.exitCode)\nprint(result.stdout)',
+      },
+      {
+        name: 'processExists', signature: 'processExists(name)',
+        desc: '检查指定名称的进程是否正在运行（仅 Windows）。',
+        params: [{ name: 'name', type: 'string', desc: '进程名，如 "notepad.exe"' }],
+        returns: 'boolean — 进程存在返回 true',
+        example: 'if (processExists("notepad.exe")) {\n  print("记事本正在运行")\n} else {\n  run("notepad.exe")\n}',
+      },
+      {
+        name: 'killProcess', signature: 'killProcess(pid)',
+        desc: '强制终止指定 PID 的进程（仅 Windows）。',
+        params: [{ name: 'pid', type: 'number', desc: '进程 ID' }],
+        returns: 'boolean — 终止成功返回 true',
+        example: 'const pid = run("notepad.exe")\nsleep(3000)\nkillProcess(parseInt(pid))',
       },
     ]
   },
@@ -488,6 +548,107 @@ const categories: Category[] = [
         ],
         returns: 'string — 响应体文本，失败返回 "error:..."',
         example: 'const resp = httpPost(\n  "https://api.example.com/submit",\n  JSON.stringify({name: "test"}),\n  "application/json"\n)\nprint(resp)',
+      },
+    ]
+  },
+  {
+    icon: '📁', name: '文件操作',
+    apis: [
+      {
+        name: 'readFile', signature: 'readFile(path)',
+        desc: '读取沙箱目录内的文件内容，返回文本字符串。',
+        params: [{ name: 'path', type: 'string', desc: '相对于沙箱目录的文件路径' }],
+        returns: 'string — 文件内容，失败返回空字符串',
+        example: 'const data = readFile("config.json")\nif (data) {\n  const config = JSON.parse(data)\n  print("配置: " + config.name)\n}',
+        notes: '路径限制在沙箱目录（scripts/）内，不允许 ".." 路径穿越。',
+      },
+      {
+        name: 'writeFile', signature: 'writeFile(path, text)',
+        desc: '将文本写入沙箱目录内的文件，文件不存在则创建，存在则覆盖。',
+        params: [
+          { name: 'path', type: 'string', desc: '相对于沙箱目录的文件路径' },
+          { name: 'text', type: 'string', desc: '要写入的文本内容' },
+        ],
+        returns: 'boolean — 写入成功返回 true',
+        example: 'const ok = writeFile("log.txt", "任务开始: " + getDateTime())\nprint("写入结果: " + ok)',
+      },
+      {
+        name: 'appendFile', signature: 'appendFile(path, content)',
+        desc: '向沙箱目录内的文件追加内容，文件不存在则创建。',
+        params: [
+          { name: 'path', type: 'string', desc: '相对于沙箱目录的文件路径' },
+          { name: 'content', type: 'string', desc: '要追加的文本内容' },
+        ],
+        returns: 'boolean — 追加成功返回 true',
+        example: '// 记录操作日志\nappendFile("log.txt", getDateTime() + " 点击了按钮\\n")\nappendFile("log.txt", getDateTime() + " 操作完成\\n")',
+      },
+      {
+        name: 'fileExists', signature: 'fileExists(path)',
+        desc: '检查沙箱内指定路径的文件是否存在。',
+        params: [{ name: 'path', type: 'string', desc: '相对于沙箱目录的文件路径' }],
+        returns: 'boolean — 文件存在返回 true',
+        example: 'if (fileExists("config.txt")) {\n  const data = readFile("config.txt")\n  print(data)\n}',
+      },
+    ]
+  },
+  {
+    icon: '⏱️', name: '定时器',
+    apis: [
+      {
+        name: 'setTimeout', signature: 'setTimeout(fn, ms)',
+        desc: '延迟指定毫秒后执行函数。注意：QuickJS 无事件循环，此为阻塞式实现（会阻塞后续代码直到回调执行完）。',
+        params: [
+          { name: 'fn', type: 'function', desc: '要执行的回调函数' },
+          { name: 'ms', type: 'number', desc: '延迟时间（毫秒）' },
+        ],
+        returns: 'number — 定时器 ID，可用 clearTimeout 取消',
+        example: 'setTimeout(function() {\n  print("3秒后执行")\n}, 3000)',
+        notes: '由于 QuickJS 没有事件循环，setTimeout 是阻塞式的：先 sleep(ms)，再执行回调。不适合用于并发场景。',
+      },
+      {
+        name: 'setInterval', signature: 'setInterval(fn, ms)',
+        desc: '每隔指定毫秒循环执行函数，直到调用 clearInterval 或脚本停止。',
+        params: [
+          { name: 'fn', type: 'function', desc: '要循环执行的回调函数' },
+          { name: 'ms', type: 'number', desc: '间隔时间（毫秒）' },
+        ],
+        returns: 'number — 定时器 ID，可用 clearInterval 停止',
+        example: 'var count = 0\nvar id = setInterval(function() {\n  count++\n  print("第 " + count + " 次执行")\n  if (count >= 5) clearInterval(id)\n}, 1000)',
+        notes: '阻塞式实现，会一直循环直到 clearInterval 被调用或脚本被停止。',
+      },
+      {
+        name: 'clearTimeout', signature: 'clearTimeout(id)',
+        desc: '取消 setTimeout 设置的定时器。',
+        params: [{ name: 'id', type: 'number', desc: 'setTimeout 返回的定时器 ID' }],
+        returns: 'void',
+        example: 'var id = setTimeout(function() { print("不会执行") }, 5000)\nclearTimeout(id)',
+      },
+      {
+        name: 'clearInterval', signature: 'clearInterval(id)',
+        desc: '停止 setInterval 设置的循环定时器。',
+        params: [{ name: 'id', type: 'number', desc: 'setInterval 返回的定时器 ID' }],
+        returns: 'void',
+        example: 'var id = setInterval(function() { print("循环中") }, 1000)\nsetTimeout(function() { clearInterval(id) }, 5000)',
+      },
+    ]
+  },
+  {
+    icon: '📐', name: '坐标模式',
+    apis: [
+      {
+        name: 'coordMode', signature: 'coordMode(mode)',
+        desc: '设置坐标模式。"screen" 为屏幕绝对坐标（默认），"window" 为相对于前台窗口客户区的坐标。',
+        params: [{ name: 'mode', type: '"screen" | "window"', desc: '坐标模式' }],
+        returns: 'string — 当前坐标模式',
+        example: 'coordMode("window")  // 切换到窗口相对坐标\nclickMouse(100, 50, "left")  // 相对于窗口的坐标\n\ncoordMode("screen")  // 切回屏幕绝对坐标',
+        notes: '目前 coordMode 仅作为标记存储，鼠标操作函数暂未自动转换坐标。可在脚本中手动结合 getWindowInfo 计算。',
+      },
+      {
+        name: 'getCoordMode', signature: 'getCoordMode()',
+        desc: '获取当前的坐标模式设置。',
+        params: [],
+        returns: 'string — "screen" 或 "window"',
+        example: 'print("当前坐标模式: " + getCoordMode())',
       },
     ]
   },

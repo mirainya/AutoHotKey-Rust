@@ -7,7 +7,37 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
 use tauri::Emitter;
+use regex::Regex;
 use crate::error::AppError;
+
+/// polyfill 占的行数，用于修正用户脚本的错误行号
+const POLYFILL_LINE_OFFSET: u32 = 33;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptError {
+    pub message: String,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+/// 解析 QuickJS 错误格式，提取行号并减去 polyfill 偏移
+fn parse_quickjs_error(err: &str) -> ScriptError {
+    // QuickJS 格式: "<eval>:LINE: ErrorType: message" 或 "<eval>:LINE:COL ..."
+    let re = Regex::new(r"<eval>:(\d+)(?::(\d+))?[:\s](.+)").unwrap();
+    if let Some(caps) = re.captures(err) {
+        let raw_line: u32 = caps[1].parse().unwrap_or(0);
+        let column: Option<u32> = caps.get(2).and_then(|m| m.as_str().parse().ok());
+        let message = caps[3].trim().to_string();
+        let adjusted_line = if raw_line > POLYFILL_LINE_OFFSET {
+            raw_line - POLYFILL_LINE_OFFSET
+        } else {
+            raw_line
+        };
+        ScriptError { message, line: Some(adjusted_line), column }
+    } else {
+        ScriptError { message: err.to_string(), line: None, column: None }
+    }
+}
 
 #[cfg(target_os = "windows")]
 use super::window;
@@ -139,6 +169,34 @@ pub fn import_script(app: tauri::AppHandle, path: String, name: String) -> Resul
 }
 
 #[tauri::command]
+pub fn check_script_syntax(code: String) -> Result<(), ScriptError> {
+    let runtime = Runtime::new().map_err(|e| ScriptError {
+        message: format!("运行时创建失败: {e}"), line: None, column: None
+    })?;
+    let context = Context::full(&runtime).map_err(|e| ScriptError {
+        message: format!("上下文创建失败: {e}"), line: None, column: None
+    })?;
+    context.with(|ctx| {
+        match ctx.eval::<rquickjs::Value, _>(code.as_str()) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let err_str = format!("{e}");
+                // 语法检查不需要减去 polyfill 偏移（没有注入 polyfill）
+                let re = Regex::new(r"<eval>:(\d+)(?::(\d+))?[:\s](.+)").unwrap();
+                if let Some(caps) = re.captures(&err_str) {
+                    let line: u32 = caps[1].parse().unwrap_or(0);
+                    let column: Option<u32> = caps.get(2).and_then(|m| m.as_str().parse().ok());
+                    let message = caps[3].trim().to_string();
+                    Err(ScriptError { message, line: Some(line), column })
+                } else {
+                    Err(ScriptError { message: err_str, line: None, column: None })
+                }
+            }
+        }
+    })
+}
+
+#[tauri::command]
 pub fn execute_script(app: tauri::AppHandle, code: String, timeout: Option<u64>) -> Result<(), AppError> {
     // 设置状态为运行中
     if let Ok(mut status) = SCRIPT_STATUS.lock() {
@@ -167,6 +225,7 @@ pub fn execute_script(app: tauri::AppHandle, code: String, timeout: Option<u64>)
     }
 
     std::thread::spawn(move || {
+        let start_time = std::time::Instant::now();
         let runtime = match Runtime::new() {
             Ok(r) => r,
             Err(e) => {
@@ -176,6 +235,11 @@ pub fn execute_script(app: tauri::AppHandle, code: String, timeout: Option<u64>)
                     "time": chrono_now(),
                     "result": format!("运行时创建失败: {e}"),
                     "success": false
+                }));
+                let _ = app.emit("script-done", serde_json::json!({
+                    "success": false,
+                    "error": ScriptError { message: format!("运行时创建失败: {e}"), line: None, column: None },
+                    "elapsed_ms": start_time.elapsed().as_millis() as u64
                 }));
                 if let Ok(mut status) = SCRIPT_STATUS.lock() {
                     *status = ScriptStatus::Error(e.to_string());
@@ -197,6 +261,11 @@ pub fn execute_script(app: tauri::AppHandle, code: String, timeout: Option<u64>)
                     "result": format!("上下文创建失败: {e}"),
                     "success": false
                 }));
+                let _ = app.emit("script-done", serde_json::json!({
+                    "success": false,
+                    "error": ScriptError { message: format!("上下文创建失败: {e}"), line: None, column: None },
+                    "elapsed_ms": start_time.elapsed().as_millis() as u64
+                }));
                 if let Ok(mut status) = SCRIPT_STATUS.lock() {
                     *status = ScriptStatus::Error(e.to_string());
                 }
@@ -209,11 +278,54 @@ pub fn execute_script(app: tauri::AppHandle, code: String, timeout: Option<u64>)
             if let Err(e) = register_api(&globals, &app, &abort) {
                 return Err(format!("API注册失败: {e}"));
             }
+
+            // 注入 JS polyfill: setTimeout / setInterval / clearTimeout / clearInterval / coordMode
+            let polyfill = r#"
+var __timers = { _id: 0, _active: {} };
+function setTimeout(fn, ms) {
+    var id = ++__timers._id;
+    __timers._active[id] = true;
+    sleep(ms || 0);
+    if (__timers._active[id]) { delete __timers._active[id]; fn(); }
+    return id;
+}
+function clearTimeout(id) { delete __timers._active[id]; }
+function setInterval(fn, ms) {
+    var id = ++__timers._id;
+    __timers._active[id] = true;
+    while (__timers._active[id] && !isStopped()) {
+        sleep(ms || 0);
+        if (__timers._active[id]) fn();
+    }
+    return id;
+}
+function clearInterval(id) { delete __timers._active[id]; }
+
+var __coordMode = "screen";
+function coordMode(mode) {
+    if (mode === "window" || mode === "screen") __coordMode = mode;
+    return __coordMode;
+}
+function getCoordMode() { return __coordMode; }
+
+var console = {
+    log: function() { var args = []; for (var i = 0; i < arguments.length; i++) { args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i], null, 2) : String(arguments[i])); } print(args.join(' ')); },
+    warn: function() { var args = []; for (var i = 0; i < arguments.length; i++) { args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i], null, 2) : String(arguments[i])); } warn(args.join(' ')); },
+    debug: function() { var args = []; for (var i = 0; i < arguments.length; i++) { args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i], null, 2) : String(arguments[i])); } debug(args.join(' ')); },
+    error: function() { var args = []; for (var i = 0; i < arguments.length; i++) { args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i], null, 2) : String(arguments[i])); } warn('[ERROR] ' + args.join(' ')); }
+};
+"#;
+            if let Err(e) = ctx.eval::<rquickjs::Value, _>(polyfill) {
+                return Err(format!("Polyfill注入失败: {e}"));
+            }
+
             match ctx.eval::<rquickjs::Value, _>(code.as_str()) {
                 Ok(_) => Ok(()),
                 Err(e) => Err(format!("{e}")),
             }
         });
+
+        let elapsed_ms = start_time.elapsed().as_millis() as u64;
 
         match &result {
             Ok(_) => {
@@ -224,14 +336,24 @@ pub fn execute_script(app: tauri::AppHandle, code: String, timeout: Option<u64>)
                     "result": "执行完成",
                     "success": true
                 }));
+                let _ = app.emit("script-done", serde_json::json!({
+                    "success": true,
+                    "elapsed_ms": elapsed_ms
+                }));
             }
             Err(e) => {
                 tracing::error!("脚本执行失败: {}", e);
+                let error = parse_quickjs_error(e);
                 let _ = app.emit("script-log", serde_json::json!({
                     "scriptName": "script",
                     "time": chrono_now(),
                     "result": e,
                     "success": false
+                }));
+                let _ = app.emit("script-done", serde_json::json!({
+                    "success": false,
+                    "error": error,
+                    "elapsed_ms": elapsed_ms
                 }));
             }
         }
@@ -304,6 +426,20 @@ fn register_api(
     globals.set("print", Func::from(move |msg: String| {
         tracing::info!("[脚本输出] {}", msg);
         let _ = app_clone.emit("script-output", msg);
+    })).map_err(|e| e.to_string())?;
+
+    // warn
+    let app_clone = app.clone();
+    globals.set("warn", Func::from(move |msg: String| {
+        tracing::warn!("[脚本警告] {}", msg);
+        let _ = app_clone.emit("script-output-warn", msg);
+    })).map_err(|e| e.to_string())?;
+
+    // debug
+    let app_clone = app.clone();
+    globals.set("debug", Func::from(move |msg: String| {
+        tracing::debug!("[脚本调试] {}", msg);
+        let _ = app_clone.emit("script-output-debug", msg);
     })).map_err(|e| e.to_string())?;
 
     // sleep
@@ -823,6 +959,128 @@ fn register_api(
         {
             Ok(resp) => resp.text().unwrap_or_default(),
             Err(e) => format!("error:{e}"),
+        }
+    })).map_err(|e| e.to_string())?;
+
+    // appendFile(path, content) — 沙箱内追加写入
+    let app_clone = app.clone();
+    globals.set("appendFile", Func::from(move |path: String, content: String| -> bool {
+        match sandbox_path(&app_clone, &path) {
+            Ok(safe_path) => {
+                use std::io::Write;
+                match std::fs::OpenOptions::new().create(true).append(true).open(&safe_path) {
+                    Ok(mut f) => f.write_all(content.as_bytes()).is_ok(),
+                    Err(e) => {
+                        tracing::error!("[appendFile] 打开失败: {} - {}", path, e);
+                        false
+                    }
+                }
+            }
+            Err(msg) => {
+                tracing::error!("[appendFile] 路径被拒绝: {} - {}", path, msg);
+                false
+            }
+        }
+    })).map_err(|e| e.to_string())?;
+
+    // getEnv(name) — 读取环境变量
+    globals.set("getEnv", Func::from(|name: String| -> String {
+        std::env::var(&name).unwrap_or_default()
+    })).map_err(|e| e.to_string())?;
+
+    // getDateTime(format?) — 获取当前时间，返回 ISO 格式或自定义格式
+    globals.set("getDateTime", Func::from(|| -> String {
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+    })).map_err(|e| e.to_string())?;
+
+    // getTimestamp() — 毫秒级时间戳
+    globals.set("getTimestamp", Func::from(|| -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as f64
+    })).map_err(|e| e.to_string())?;
+
+    // processExists(name) — 检查进程是否存在（通过 tasklist）
+    #[cfg(target_os = "windows")]
+    globals.set("processExists", Func::from(|name: String| -> bool {
+        match std::process::Command::new("tasklist")
+            .args(["/FI", &format!("IMAGENAME eq {}", name), "/NH"])
+            .output()
+        {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.contains(&name)
+            }
+            Err(_) => false,
+        }
+    })).map_err(|e| e.to_string())?;
+
+    // killProcess(pid) — 终止进程
+    #[cfg(target_os = "windows")]
+    globals.set("killProcess", Func::from(|pid: u32| -> bool {
+        std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })).map_err(|e| e.to_string())?;
+
+    // enumWindows() — 枚举所有窗口，返回 JSON 数组
+    #[cfg(target_os = "windows")]
+    globals.set("enumWindows", Func::from(|| -> String {
+        let list = window::enum_windows();
+        serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
+    })).map_err(|e| e.to_string())?;
+
+    // waitForWindow(title, timeout) — 等待窗口出现
+    #[cfg(target_os = "windows")]
+    {
+        let abort_clone = abort.clone();
+        globals.set("waitForWindow", Func::from(move |title: String, timeout_ms: u64| -> i64 {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+            loop {
+                if abort_clone.load(Ordering::Relaxed) { return 0; }
+                if let Some(hwnd) = window::find_window(title.clone()) {
+                    if hwnd != 0 { return hwnd as i64; }
+                }
+                if std::time::Instant::now() >= deadline { return 0; }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        })).map_err(|e| e.to_string())?;
+    }
+
+    // playSound(path) — 播放 WAV 文件（Windows PlaySound API）
+    #[cfg(target_os = "windows")]
+    globals.set("playSound", Func::from(|path: String| {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "winmm")]
+        extern "system" {
+            fn PlaySoundW(pszSound: *const u16, hmod: isize, fdwSound: u32) -> i32;
+        }
+        let wide: Vec<u16> = OsStr::new(&path).encode_wide().chain(std::iter::once(0)).collect();
+        // SND_FILENAME | SND_ASYNC = 0x00020000 | 0x0001
+        unsafe { PlaySoundW(wide.as_ptr(), 0, 0x00020001); }
+    })).map_err(|e| e.to_string())?;
+
+    // include(path) — 执行另一个脚本文件（沙箱内）
+    let app_clone = app.clone();
+    globals.set("include", Func::from(move |path: String| -> String {
+        match sandbox_path(&app_clone, &path) {
+            Ok(safe_path) => {
+                match std::fs::read_to_string(&safe_path) {
+                    Ok(code) => code, // 返回代码内容，由 JS 侧 eval
+                    Err(e) => {
+                        tracing::error!("[include] 读取失败: {} - {}", path, e);
+                        String::new()
+                    }
+                }
+            }
+            Err(msg) => {
+                tracing::error!("[include] 路径被拒绝: {} - {}", path, msg);
+                String::new()
+            }
         }
     })).map_err(|e| e.to_string())?;
 

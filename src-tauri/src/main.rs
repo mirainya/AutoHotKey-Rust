@@ -98,6 +98,7 @@ fn main() {
             automation::get_mouse_pos,
             automation::get_screen_size,
             script::execute_script,
+            script::check_script_syntax,
             script::stop_script,
             script::save_script,
             script::load_scripts,
