@@ -53,7 +53,7 @@
                         width: '30px',
                         height: '20px',
                         backgroundColor: `rgb(${row.r}, ${row.g}, ${row.b})`,
-                        border: '1px solid #dcdfe6',
+                        border: '1px solid var(--el-border-color)',
                         borderRadius: '4px'
                       }"></div>
                     </template>
@@ -546,7 +546,7 @@ onUnmounted(() => {
 .image-container {
   position: relative;
   width: 100%;
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--el-border-color);
   border-radius: 4px;
   overflow: hidden;
   display: flex;
@@ -602,7 +602,7 @@ onUnmounted(() => {
   width: 24px;
   height: 24px;
   border-radius: 4px;
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--el-border-color);
   cursor: pointer;
 }
 

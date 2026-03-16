@@ -88,3 +88,6 @@ pnpm-lock.yaml
 .vscode/
 *.sublime-project
 *.sublime-workspace
+
+# Claude
+.claude/

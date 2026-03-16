@@ -100,6 +100,8 @@ fn main() {
             script::execute_script,
             script::check_script_syntax,
             script::stop_script,
+            script::debug_continue,
+            script::debug_step_over,
             script::save_script,
             script::load_scripts,
             script::delete_script,

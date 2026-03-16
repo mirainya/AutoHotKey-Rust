@@ -9,7 +9,7 @@
           clearable
           size="small"
           style="width: 200px"
-          prefix-icon="Search"
+          :prefix-icon="Search"
         />
         <el-button @click="showLogsDialog = true">📋 查看运行日志</el-button>
         <el-button @click="importScript">📥 导入</el-button>
@@ -18,8 +18,8 @@
     </div>
 
     <el-table :data="filteredScripts" style="width: 100%">
-      <el-table-column prop="name" label="脚本名称" width="200" />
-      <el-table-column label="快捷键" width="200">
+      <el-table-column prop="name" label="脚本名称" min-width="200" />
+      <el-table-column label="快捷键" min-width="180">
         <template #default="{ row }">
           <el-input
             v-model="row.hotkey"
@@ -61,6 +61,11 @@
           </el-dropdown>
         </template>
       </el-table-column>
+      <template #empty>
+        <div class="table-empty-state">
+          <p>还没有脚本呢，点击右上角「添加脚本」创建一个吧~</p>
+        </div>
+      </template>
     </el-table>
 
     <el-dialog v-model="showLogsDialog" title="📋 运行日志" width="800px">
@@ -82,6 +87,7 @@ import { ref, computed, onMounted, onUnmounted, inject, type Ref } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import { save, open } from '@tauri-apps/plugin-dialog'
 import { ElMessage } from 'element-plus'
+import { Search } from '@element-plus/icons-vue'
 import { useScriptStore, type Script } from '../stores/scriptStore'
 import { tauriInvoke } from '../utils/tauri'
 
@@ -276,5 +282,11 @@ onUnmounted(() => {
   background: linear-gradient(135deg, var(--miku-light), var(--miku-primary));
   box-shadow: var(--shadow-hover);
   transform: translateY(-1px);
+}
+
+.table-empty-state {
+  padding: 40px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 </style>

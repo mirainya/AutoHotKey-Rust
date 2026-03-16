@@ -4,7 +4,7 @@
   "identifier": "com.autohotkey.rust",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:5271",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },

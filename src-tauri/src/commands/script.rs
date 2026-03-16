@@ -11,7 +11,7 @@ use regex::Regex;
 use crate::error::AppError;
 
 /// polyfill 占的行数，用于修正用户脚本的错误行号
-const POLYFILL_LINE_OFFSET: u32 = 33;
+const POLYFILL_LINE_OFFSET: u32 = 81;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScriptError {
@@ -62,6 +62,8 @@ pub enum ScriptStatus {
 
 static ABORT_FLAG: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
 static SCRIPT_STATUS: Mutex<ScriptStatus> = Mutex::new(ScriptStatus::Idle);
+static DEBUG_CONTINUE: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+static STEP_MODE: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
 
 fn get_scripts_dir(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
     let mut path = app.path().app_data_dir().map_err(|e| AppError::Io(e.to_string()))?;
@@ -115,6 +117,46 @@ pub fn stop_script() -> Result<(), AppError> {
             tracing::info!("脚本停止信号已发送");
         }
     }
+    // 停止时也要释放断点等待
+    if let Ok(flag_guard) = DEBUG_CONTINUE.lock() {
+        if let Some(flag) = flag_guard.as_ref() {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn debug_continue() -> Result<(), AppError> {
+    // 继续时清除步进模式
+    if let Ok(flag_guard) = STEP_MODE.lock() {
+        if let Some(flag) = flag_guard.as_ref() {
+            flag.store(false, Ordering::Relaxed);
+        }
+    }
+    if let Ok(flag_guard) = DEBUG_CONTINUE.lock() {
+        if let Some(flag) = flag_guard.as_ref() {
+            flag.store(true, Ordering::Relaxed);
+            tracing::info!("断点继续信号已发送");
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn debug_step_over() -> Result<(), AppError> {
+    // 设置步进模式，然后释放暂停
+    if let Ok(flag_guard) = STEP_MODE.lock() {
+        if let Some(flag) = flag_guard.as_ref() {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+    if let Ok(flag_guard) = DEBUG_CONTINUE.lock() {
+        if let Some(flag) = flag_guard.as_ref() {
+            flag.store(true, Ordering::Relaxed);
+            tracing::info!("步进信号已发送");
+        }
+    }
     Ok(())
 }
 
@@ -131,7 +173,7 @@ pub fn run_script_by_id(app: tauri::AppHandle, id: String) -> Result<(), AppErro
     let content = fs::read_to_string(&path)?;
     let script: Script = serde_json::from_str(&content)?;
     tracing::info!("按ID运行脚本: {} ({})", script.name, id);
-    execute_script(app, script.code, None)
+    execute_script(app, script.code, None, None)
 }
 
 #[tauri::command]
@@ -177,14 +219,18 @@ pub fn check_script_syntax(code: String) -> Result<(), ScriptError> {
         message: format!("上下文创建失败: {e}"), line: None, column: None
     })?;
     context.with(|ctx| {
-        match ctx.eval::<rquickjs::Value, _>(code.as_str()) {
+        // 包在函数体里只做语法解析，不实际执行（避免未注入 API 导致运行时异常）
+        let wrapped = format!("(function(){{\n{}\n}})", code);
+        match ctx.eval::<rquickjs::Value, _>(wrapped.as_str()) {
             Ok(_) => Ok(()),
             Err(e) => {
                 let err_str = format!("{e}");
                 // 语法检查不需要减去 polyfill 偏移（没有注入 polyfill）
                 let re = Regex::new(r"<eval>:(\d+)(?::(\d+))?[:\s](.+)").unwrap();
                 if let Some(caps) = re.captures(&err_str) {
-                    let line: u32 = caps[1].parse().unwrap_or(0);
+                    // 减 1 补偿包裹函数增加的首行
+                    let raw_line: u32 = caps[1].parse().unwrap_or(0);
+                    let line = if raw_line > 1 { raw_line - 1 } else { raw_line };
                     let column: Option<u32> = caps.get(2).and_then(|m| m.as_str().parse().ok());
                     let message = caps[3].trim().to_string();
                     Err(ScriptError { message, line: Some(line), column })
@@ -197,7 +243,7 @@ pub fn check_script_syntax(code: String) -> Result<(), ScriptError> {
 }
 
 #[tauri::command]
-pub fn execute_script(app: tauri::AppHandle, code: String, timeout: Option<u64>) -> Result<(), AppError> {
+pub fn execute_script(app: tauri::AppHandle, code: String, timeout: Option<u64>, breakpoint_lines: Option<Vec<u32>>) -> Result<(), AppError> {
     // 设置状态为运行中
     if let Ok(mut status) = SCRIPT_STATUS.lock() {
         *status = ScriptStatus::Running;
@@ -206,6 +252,16 @@ pub fn execute_script(app: tauri::AppHandle, code: String, timeout: Option<u64>)
     let abort = Arc::new(AtomicBool::new(false));
     if let Ok(mut flag) = ABORT_FLAG.lock() {
         *flag = Some(abort.clone());
+    }
+
+    let debug_cont = Arc::new(AtomicBool::new(false));
+    if let Ok(mut flag) = DEBUG_CONTINUE.lock() {
+        *flag = Some(debug_cont.clone());
+    }
+
+    let step_mode = Arc::new(AtomicBool::new(false));
+    if let Ok(mut flag) = STEP_MODE.lock() {
+        *flag = Some(step_mode.clone());
     }
 
     // 超时守护线程
@@ -279,42 +335,111 @@ pub fn execute_script(app: tauri::AppHandle, code: String, timeout: Option<u64>)
                 return Err(format!("API注册失败: {e}"));
             }
 
+            // 注册原生断点函数 __bp_native(line, varsJson) -> bool (返回是否步进模式)
+            let bp_app = app.clone();
+            let bp_abort = abort.clone();
+            let bp_cont = debug_cont.clone();
+            let bp_step = step_mode.clone();
+            globals.set("__bp_native", Func::from(move |line: u32, vars: String| -> bool {
+                let _ = bp_app.emit("script-breakpoint-hit", line);
+                let _ = bp_app.emit("script-breakpoint-vars", vars);
+                // 重置步进标志（每次暂停后需要重新触发步进）
+                bp_step.store(false, Ordering::Relaxed);
+                bp_cont.store(false, Ordering::Relaxed);
+                while !bp_cont.load(Ordering::Relaxed) && !bp_abort.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                // 返回当前步进标志，JS 侧据此决定下一行是否暂停
+                bp_step.load(Ordering::Relaxed)
+            })).ok();
+
+            // 构建断点行集合的 JS 数组
+            let bp_lines_js = if let Some(ref lines) = breakpoint_lines {
+                let items: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+                format!("[{}]", items.join(","))
+            } else {
+                "[]".to_string()
+            };
+            let is_debug_mode = breakpoint_lines.as_ref().map_or(false, |l| !l.is_empty());
+
             // 注入 JS polyfill: setTimeout / setInterval / clearTimeout / clearInterval / coordMode
-            let polyfill = r#"
-var __timers = { _id: 0, _active: {} };
-function setTimeout(fn, ms) {
+            let polyfill = format!(r#"
+var __timers = {{ _id: 0, _active: {{}} }};
+function setTimeout(fn, ms) {{
     var id = ++__timers._id;
     __timers._active[id] = true;
     sleep(ms || 0);
-    if (__timers._active[id]) { delete __timers._active[id]; fn(); }
+    if (__timers._active[id]) {{ delete __timers._active[id]; fn(); }}
     return id;
-}
-function clearTimeout(id) { delete __timers._active[id]; }
-function setInterval(fn, ms) {
+}}
+function clearTimeout(id) {{ delete __timers._active[id]; }}
+function setInterval(fn, ms) {{
     var id = ++__timers._id;
     __timers._active[id] = true;
-    while (__timers._active[id] && !isStopped()) {
+    while (__timers._active[id] && !isStopped()) {{
         sleep(ms || 0);
         if (__timers._active[id]) fn();
-    }
+    }}
     return id;
-}
-function clearInterval(id) { delete __timers._active[id]; }
+}}
+function clearInterval(id) {{ delete __timers._active[id]; }}
 
 var __coordMode = "screen";
-function coordMode(mode) {
+function coordMode(mode) {{
     if (mode === "window" || mode === "screen") __coordMode = mode;
     return __coordMode;
-}
-function getCoordMode() { return __coordMode; }
+}}
+function getCoordMode() {{ return __coordMode; }}
 
-var console = {
-    log: function() { var args = []; for (var i = 0; i < arguments.length; i++) { args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i], null, 2) : String(arguments[i])); } print(args.join(' ')); },
-    warn: function() { var args = []; for (var i = 0; i < arguments.length; i++) { args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i], null, 2) : String(arguments[i])); } warn(args.join(' ')); },
-    debug: function() { var args = []; for (var i = 0; i < arguments.length; i++) { args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i], null, 2) : String(arguments[i])); } debug(args.join(' ')); },
-    error: function() { var args = []; for (var i = 0; i < arguments.length; i++) { args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i], null, 2) : String(arguments[i])); } warn('[ERROR] ' + args.join(' ')); }
-};
-"#;
+var console = {{
+    log: function() {{ var args = []; for (var i = 0; i < arguments.length; i++) {{ args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i], null, 2) : String(arguments[i])); }} print(args.join(' ')); }},
+    warn: function() {{ var args = []; for (var i = 0; i < arguments.length; i++) {{ args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i], null, 2) : String(arguments[i])); }} warn(args.join(' ')); }},
+    debug: function() {{ var args = []; for (var i = 0; i < arguments.length; i++) {{ args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i], null, 2) : String(arguments[i])); }} debug(args.join(' ')); }},
+    error: function() {{ var args = []; for (var i = 0; i < arguments.length; i++) {{ args.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i], null, 2) : String(arguments[i])); }} warn('[ERROR] ' + args.join(' ')); }}
+}};
+
+var __bpLines = {bp_lines};
+var __debugMode = {debug_mode};
+var __stepMode = false;
+
+// 记录 polyfill 注入完成后的初始全局变量集合，快照时排除这些
+var __initKeys = {{}};
+(function() {{
+    var keys = Object.getOwnPropertyNames(globalThis);
+    for (var i = 0; i < keys.length; i++) __initKeys[keys[i]] = 1;
+}})();
+
+function __snapshot() {{
+    var result = {{}};
+    try {{
+        var keys = Object.getOwnPropertyNames(globalThis);
+        for (var i = 0; i < keys.length; i++) {{
+            var k = keys[i];
+            if (__initKeys[k]) continue;
+            try {{
+                var v = globalThis[k];
+                var t = typeof v;
+                if (t === 'function') continue;
+                if (t === 'undefined') {{ result[k] = 'undefined'; }}
+                else if (v === null) {{ result[k] = 'null'; }}
+                else if (t === 'object') {{ result[k] = JSON.stringify(v); }}
+                else {{ result[k] = String(v); }}
+            }} catch(e) {{}}
+        }}
+    }} catch(e) {{}}
+    return JSON.stringify(result);
+}}
+
+function __step(line) {{
+    if (!__debugMode) return;
+    var isBp = false;
+    for (var i = 0; i < __bpLines.length; i++) {{
+        if (__bpLines[i] === line) {{ isBp = true; break; }}
+    }}
+    if (!isBp && !__stepMode) return;
+    __stepMode = __bp_native(line, __snapshot());
+}}
+"#, bp_lines = bp_lines_js, debug_mode = if is_debug_mode { "true" } else { "false" });
             if let Err(e) = ctx.eval::<rquickjs::Value, _>(polyfill) {
                 return Err(format!("Polyfill注入失败: {e}"));
             }

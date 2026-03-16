@@ -2,29 +2,43 @@
   <div class="editor-page">
     <div class="toolbar">
       <el-button-group>
-        <el-button title="新建" @click="handleNew">
-          <el-icon><Plus /></el-icon>
-        </el-button>
-        <el-button title="打开" @click="handleOpen">
-          <el-icon><FolderOpened /></el-icon>
-        </el-button>
-        <el-button type="primary" title="保存" @click="handleSave">
-          <el-icon><Document /></el-icon>
-        </el-button>
+        <el-tooltip content="新建" placement="bottom" :show-after="500">
+          <el-button @click="handleNew">
+            <el-icon><Plus /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-tooltip content="打开" placement="bottom" :show-after="500">
+          <el-button @click="handleOpen">
+            <el-icon><FolderOpened /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-tooltip content="保存" placement="bottom" :show-after="500">
+          <el-button type="primary" @click="handleSave">
+            <el-icon><Document /></el-icon>
+          </el-button>
+        </el-tooltip>
       </el-button-group>
       <el-button-group style="margin-left: 12px">
-        <el-button type="success" title="运行" :disabled="isRunning" @click="handleRun">
-          <el-icon><CaretRight /></el-icon>
-        </el-button>
+        <el-tooltip content="运行" placement="bottom" :show-after="500">
+          <el-button type="success" :disabled="isRunning" @click="handleRun">
+            <el-icon><CaretRight /></el-icon>
+          </el-button>
+        </el-tooltip>
         <el-button type="danger" title="停止" v-if="isRunning" @click="handleStop">停止</el-button>
-        <el-button title="调试" @click="handleDebug">
-          <el-icon><VideoPlay /></el-icon>
-        </el-button>
+        <el-button type="warning" title="继续" v-if="isPaused" @click="handleDebugContinue">继续</el-button>
+        <el-button type="info" title="步进" v-if="isPaused" @click="handleStepOver">步进</el-button>
+        <el-tooltip content="调试" placement="bottom" :show-after="500">
+          <el-button @click="handleDebug">
+            <el-icon><VideoPlay /></el-icon>
+          </el-button>
+        </el-tooltip>
       </el-button-group>
       <el-button-group style="margin-left: 12px">
-        <el-button title="格式化" @click="handleFormat">
-          <el-icon><MagicStick /></el-icon>
-        </el-button>
+        <el-tooltip content="格式化" placement="bottom" :show-after="500">
+          <el-button @click="handleFormat">
+            <el-icon><MagicStick /></el-icon>
+          </el-button>
+        </el-tooltip>
       </el-button-group>
     </div>
     <div class="editor-container">
@@ -43,21 +57,41 @@
       <div class="resizer" @mousedown="startResize"></div>
       <div class="console" :style="{ height: consoleHeight + 'px' }">
         <div class="console-header">
-          <span>控制台输出</span>
-          <div class="console-filters">
+          <div class="console-tabs">
+            <span class="console-tab" :class="{ active: consoleTab === 'output' }" @click="consoleTab = 'output'">控制台</span>
+            <span class="console-tab" :class="{ active: consoleTab === 'vars' }" @click="consoleTab = 'vars'">
+              变量
+              <span v-if="Object.keys(debugVars).length" class="var-badge">{{ Object.keys(debugVars).length }}</span>
+            </span>
+          </div>
+          <div class="console-filters" v-show="consoleTab === 'output'">
             <el-button size="small" :type="consoleFilter === 'all' ? 'primary' : ''" text @click="consoleFilter = 'all'">全部</el-button>
             <el-button size="small" :type="consoleFilter === 'error' ? 'danger' : ''" text @click="consoleFilter = 'error'">错误</el-button>
             <el-button size="small" :type="consoleFilter === 'warn' ? 'warning' : ''" text @click="consoleFilter = 'warn'">警告</el-button>
             <el-button size="small" :type="consoleFilter === 'debug' ? 'info' : ''" text @click="consoleFilter = 'debug'">调试</el-button>
           </div>
-          <div class="console-actions">
+          <div class="console-actions" v-show="consoleTab === 'output'">
             <el-button size="small" text @click="copyConsole" title="复制">📋</el-button>
             <el-button size="small" text @click="clearConsole" title="清空">🗑️</el-button>
           </div>
         </div>
-        <pre class="console-content" ref="consoleRef"><template v-if="filteredConsoleLines.length">
+        <pre v-show="consoleTab === 'output'" class="console-content" ref="consoleRef"><template v-if="filteredConsoleLines.length">
 <template v-for="(line, i) in filteredConsoleLines" :key="i"><span :class="['console-line', line.type]">{{ line.text }}
 </span></template></template><template v-else>等待运行...</template></pre>
+        <div v-show="consoleTab === 'vars'" class="vars-panel">
+          <div v-if="!isPaused && !Object.keys(debugVars).length" class="vars-empty">
+            调试暂停时显示变量信息
+          </div>
+          <div v-else-if="!Object.keys(debugVars).length" class="vars-empty">
+            当前作用域无用户变量
+          </div>
+          <div v-else class="vars-list">
+            <div v-for="(val, key) in debugVars" :key="key" class="var-item">
+              <span class="var-name">{{ key }}</span>
+              <span class="var-value" :title="val">{{ val }}</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -69,11 +103,11 @@ import { Codemirror } from 'vue-codemirror'
 import { javascript } from '@codemirror/lang-javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { linter, type Diagnostic } from '@codemirror/lint'
-import { lineNumbers, Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
+import { lineNumbers, Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, gutter, GutterMarker } from '@codemirror/view'
 import { bracketMatching, foldGutter, foldKeymap } from '@codemirror/language'
 import { search, searchKeymap } from '@codemirror/search'
 import { keymap } from '@codemirror/view'
-import { StateEffect, StateField } from '@codemirror/state'
+import { StateEffect, StateField, RangeSet } from '@codemirror/state'
 import { ahkAutocomplete } from '../utils/ahkCompletions'
 import { listen } from '@tauri-apps/api/event'
 import { open, save } from '@tauri-apps/plugin-dialog'
@@ -84,6 +118,74 @@ import { type Script } from '../stores/scriptStore'
 import { useScriptStore } from '../stores/scriptStore'
 import { useConfigStore } from '../stores/configStore'
 import { tauriInvoke } from '../utils/tauri'
+
+// 断点 gutter
+const toggleBreakpoint = StateEffect.define<{ pos: number; on: boolean }>()
+
+class BreakpointMarker extends GutterMarker {
+  toDOM() {
+    const el = document.createElement('div')
+    el.className = 'cm-breakpoint-marker'
+    el.textContent = '●'
+    return el
+  }
+}
+
+const breakpointState = StateField.define<RangeSet<GutterMarker>>({
+  create() { return RangeSet.empty },
+  update(set, tr) {
+    set = set.map(tr.changes)
+    for (const e of tr.effects) {
+      if (e.is(toggleBreakpoint)) {
+        if (e.value.on) {
+          set = set.update({ add: [new BreakpointMarker().range(e.value.pos)] })
+        } else {
+          const remove: any[] = []
+          const cursor = set.iter(e.value.pos)
+          while (cursor.value && cursor.from === e.value.pos) {
+            remove.push(cursor)
+            cursor.next()
+          }
+          set = set.update({ filter: (from) => from !== e.value.pos })
+        }
+      }
+    }
+    return set
+  }
+})
+
+const breakpointGutter = gutter({
+  class: 'cm-breakpoint-gutter',
+  markers: (view) => view.state.field(breakpointState),
+  initialSpacer: () => new BreakpointMarker(),
+  domEventHandlers: {
+    mousedown(view, line) {
+      const pos = line.from
+      let hasBreakpoint = false
+      view.state.field(breakpointState).between(pos, pos, () => { hasBreakpoint = true })
+      view.dispatch({ effects: toggleBreakpoint.of({ pos, on: !hasBreakpoint }) })
+      return true
+    }
+  }
+})
+
+// 断点行高亮（调试暂停时）
+const setActiveLine = StateEffect.define<number | null>()
+const activeLineField = StateField.define<DecorationSet>({
+  create() { return Decoration.none },
+  update(deco, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setActiveLine)) {
+        if (e.value === null) return Decoration.none
+        const line = tr.state.doc.line(Math.min(e.value, tr.state.doc.lines))
+        return Decoration.set([
+          Decoration.line({ class: 'cm-active-breakpoint-line' }).range(line.from)
+        ])
+      }
+    }
+    return deco
+  }
+})
 
 // 错误行高亮 decoration
 const setErrorLine = StateEffect.define<number | null>()
@@ -135,6 +237,9 @@ const extensions = [
   oneDark,
   backendLinter,
   errorLineField,
+  breakpointState,
+  breakpointGutter,
+  activeLineField,
   ahkAutocomplete,
   lineNumbers(),
   bracketMatching(),
@@ -161,6 +266,7 @@ const consoleRef = ref<HTMLPreElement>()
 interface ConsoleLine { text: string; type: 'info' | 'warn' | 'error' | 'debug' | 'timing' }
 const consoleLines = ref<ConsoleLine[]>([])
 const consoleFilter = ref<string>('all')
+const consoleTab = ref<'output' | 'vars'>('output')
 
 function timestamp() {
   const d = new Date()
@@ -369,6 +475,28 @@ const handleStop = async () => {
   await tauriInvoke('stop_script')
 }
 
+// 从用户代码中提取 var/let/const 声明的变量名
+function extractVarNames(code: string): string[] {
+  const names = new Set<string>()
+  const re = /\b(?:var|let|const)\s+([a-zA-Z_$][\w$]*)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(code)) !== null) {
+    names.add(m[1])
+  }
+  // 也捕获 for 循环中的解构: for (let i = ...)
+  // 以及多变量声明: var a = 1, b = 2
+  const multiRe = /\b(?:var|let|const)\s+(.+?)(?:;|$)/gm
+  while ((m = multiRe.exec(code)) !== null) {
+    const decl = m[1]
+    const varRe = /([a-zA-Z_$][\w$]*)\s*(?:=|,|$)/g
+    let vm: RegExpExecArray | null
+    while ((vm = varRe.exec(decl)) !== null) {
+      names.add(vm[1])
+    }
+  }
+  return [...names]
+}
+
 onUnmounted(() => {
   unlistenOutput?.()
   unlistenDone?.()
@@ -376,24 +504,162 @@ onUnmounted(() => {
   unlistenNotify?.()
   unlistenWarn?.()
   unlistenDebug?.()
+  unlistenBreakpointHit?.()
+  unlistenBreakpointVars?.()
 })
+
+// 获取当前编辑器中所有断点的行号
+function getBreakpointLines(): number[] {
+  if (!cmView.value) return []
+  const lines: number[] = []
+  const bpSet = cmView.value.state.field(breakpointState)
+  const cursor = bpSet.iter()
+  while (cursor.value) {
+    const lineNum = cmView.value.state.doc.lineAt(cursor.from).number
+    lines.push(lineNum)
+    cursor.next()
+  }
+  return lines.sort((a, b) => a - b)
+}
+
+function clearActiveLine() {
+  if (cmView.value) {
+    cmView.value.dispatch({ effects: setActiveLine.of(null) })
+  }
+}
+
+function highlightActiveLine(line: number) {
+  if (cmView.value && line > 0) {
+    cmView.value.dispatch({ effects: setActiveLine.of(line) })
+  }
+}
+
+const isPaused = ref(false)
+const debugVars = ref<Record<string, string>>({})
+let unlistenBreakpointHit: (() => void) | null = null
+let unlistenBreakpointVars: (() => void) | null = null
+
+const handleDebugContinue = async () => {
+  clearActiveLine()
+  isPaused.value = false
+  appendConsole('▶ 继续执行...', 'debug')
+  await tauriInvoke('debug_continue')
+}
+
+const handleStepOver = async () => {
+  clearActiveLine()
+  isPaused.value = false
+  appendConsole('⏭ 步进...', 'debug')
+  await tauriInvoke('debug_step_over')
+}
 
 const handleDebug = async () => {
   if (!currentTab.value) return
+  const bpLines = getBreakpointLines()
+  if (bpLines.length === 0) {
+    handleRun()
+    return
+  }
+
   clearConsole()
   clearErrorLine()
+  clearActiveLine()
+  debugVars.value = {}
   appendConsole('语法检查中...', 'debug')
   try {
     await tauriInvoke('check_script_syntax', { code: currentTab.value.code })
     appendConsole('✓ 语法检查通过', 'timing')
-    // 无断点时等同于普通运行
-    handleRun()
   } catch (err: any) {
     let error: any
     try { error = typeof err === 'string' ? JSON.parse(err) : err } catch { error = { message: String(err) } }
     const loc = error.line ? ` (第 ${error.line} 行)` : ''
     appendConsole(`✗ 语法错误: ${error.message}${loc}`, 'error')
     if (error.line) highlightErrorLine(error.line)
+    return
+  }
+
+  // 从用户代码中提取变量名，生成显式捕获的 __snapshot 覆盖
+  const varNames = extractVarNames(currentTab.value.code)
+  const snapshotOverride = varNames.length > 0
+    ? `__snapshot = function() { var r = {}; ${varNames.map(v =>
+        `try { r["${v}"] = (typeof ${v} === 'object' && ${v} !== null) ? JSON.stringify(${v}) : String(${v}); } catch(e) {}`
+      ).join(' ')} return JSON.stringify(r); };`
+    : ''
+
+  // 在每一行前注入 __step(lineNum) 调用（跳过空行和纯注释行）
+  const lines = currentTab.value.code.split('\n')
+  const injected = (snapshotOverride ? snapshotOverride + '\n' : '') + lines.map((line, i) => {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('//')) return line
+    return `__step(${i + 1});\n${line}`
+  }).join('\n')
+
+  appendConsole(`⬤ 已设置 ${bpLines.length} 个断点: 行 ${bpLines.join(', ')}`, 'debug')
+  isRunning.value = true
+
+  // 监听断点命中事件
+  unlistenBreakpointHit = await listen<number>('script-breakpoint-hit', (e) => {
+    isPaused.value = true
+    highlightActiveLine(e.payload)
+    appendConsole(`⬤ 断点命中: 第 ${e.payload} 行`, 'debug')
+  })
+
+  // 监听变量快照事件
+  unlistenBreakpointVars = await listen<string>('script-breakpoint-vars', (e) => {
+    try {
+      debugVars.value = JSON.parse(e.payload)
+    } catch {
+      debugVars.value = {}
+    }
+  })
+
+  unlistenOutput = await listen<string>('script-output', (e) => {
+    const isError = /^\[错误\]|^\[超时\]|^Error/i.test(e.payload)
+    appendConsole(e.payload, isError ? 'error' : 'info')
+  })
+
+  interface ScriptDonePayload {
+    success: boolean
+    elapsed_ms?: number
+    error?: { message: string; line?: number; column?: number }
+  }
+
+  unlistenDone = await listen<ScriptDonePayload>('script-done', (e) => {
+    const p = e.payload
+    if (p.success) {
+      appendConsole(`✓ 调试执行完成 (${p.elapsed_ms ?? 0}ms)`, 'timing')
+    } else {
+      const err = p.error
+      if (err) {
+        const loc = err.line ? ` (第 ${err.line} 行)` : ''
+        appendConsole(`✗ ${err.message}${loc} (${p.elapsed_ms ?? 0}ms)`, 'error')
+        if (err.line) highlightErrorLine(err.line)
+      }
+    }
+    isRunning.value = false
+    isPaused.value = false
+    debugVars.value = {}
+    clearActiveLine()
+    unlistenOutput?.(); unlistenOutput = null
+    unlistenDone?.(); unlistenDone = null
+    unlistenBreakpointHit?.(); unlistenBreakpointHit = null
+    unlistenBreakpointVars?.(); unlistenBreakpointVars = null
+  })
+
+  try {
+    const configStore = useConfigStore()
+    const timeout = configStore.config.scriptTimeout || undefined
+    await tauriInvoke('execute_script', { code: injected, timeout, breakpointLines: bpLines })
+  } catch (error) {
+    appendConsole(`错误: ${error}`, 'error')
+    isRunning.value = false
+    isPaused.value = false
+    debugVars.value = {}
+    clearActiveLine()
+    unlistenOutput?.(); unlistenOutput = null
+    unlistenDone?.(); unlistenDone = null
+    unlistenBreakpointHit?.(); unlistenBreakpointHit = null
+    unlistenBreakpointVars?.(); unlistenBreakpointVars = null
   }
 }
 
@@ -512,7 +778,7 @@ const handleRename = async (tab: Script) => {
 
 .console-filters {
   display: flex;
-  gap: 2px;
+  gap: 4px;
 }
 
 .console-actions {
@@ -587,5 +853,106 @@ const handleRename = async (tab: Script) => {
 
 :deep(.cm-error-line) {
   background: rgba(245, 108, 108, 0.15);
+}
+
+:deep(.cm-breakpoint-gutter) {
+  width: 16px;
+  cursor: pointer;
+}
+
+:deep(.cm-breakpoint-marker) {
+  color: var(--el-color-danger);
+  font-size: 10px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+:deep(.cm-active-breakpoint-line) {
+  background: rgba(255, 193, 7, 0.2);
+}
+
+/* 控制台 tab 切换 */
+.console-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.console-tab {
+  padding: 2px 12px;
+  cursor: pointer;
+  border-radius: 4px 4px 0 0;
+  color: #888;
+  font-size: 12px;
+  transition: color 0.2s, background 0.2s;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.console-tab:hover {
+  color: #ccc;
+}
+
+.console-tab.active {
+  color: var(--miku-primary, #39c5bb);
+  background: rgba(57, 197, 187, 0.1);
+}
+
+.var-badge {
+  background: var(--miku-primary, #39c5bb);
+  color: #fff;
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 8px;
+  line-height: 16px;
+  min-width: 16px;
+  text-align: center;
+}
+
+/* 变量面板 */
+.vars-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.vars-empty {
+  color: #666;
+  font-size: 13px;
+  text-align: center;
+  padding: 24px;
+}
+
+.vars-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.var-item {
+  display: flex;
+  padding: 4px 16px;
+  font-family: 'Consolas', monospace;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background 0.15s;
+}
+
+.var-item:hover {
+  background: rgba(57, 197, 187, 0.06);
+}
+
+.var-name {
+  color: #e06c75;
+  min-width: 120px;
+  flex-shrink: 0;
+  padding-right: 12px;
+}
+
+.var-value {
+  color: #98c379;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
